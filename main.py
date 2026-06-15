@@ -22,7 +22,7 @@ def main() -> None:
                 print("No se encontraron trackers. Inicia SteamVR y vuelve a intentarlo.")
                 sys.exit(1)
 
-            viewer = PygameViewer(tracker_sources=trackers, window_size=(1280, 720))
+            viewer = PygameViewer(tracker_sources=trackers, window_size=(2100, 620))
             viewer.run()
 
     else:  # mock

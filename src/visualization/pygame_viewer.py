@@ -1,6 +1,13 @@
 """
 pygame_viewer.py
 ----------------
+Renders three projections side by side:
+
+    ┌─────────────┬─────────────┬─────────────┬───────────┐
+    │   XZ plane  │   XY plane  │   ZY plane  │   Panel   │
+    │  (top-down) │   (front)   │   (side)    │  (stats)  │
+    └─────────────┴─────────────┴─────────────┴───────────┘
+
     • Static elements (grid, axes, labels, panel chrome) are pre-rendered
       onto a cached Surface and blitted once per frame.
     • Only tracker markers and live text are redrawn each frame.
@@ -14,6 +21,15 @@ from typing import Sequence
 
 from ..tracker.openvr_tracker import BaseTracker
 from ..utils.coordinate_mapper import CoordinateMapper
+# ──────────────────────────────────────────────────────────────────────────────
+#  PLANE DEFINITIONS
+# ──────────────────────────────────────────────────────────────────────────────
+# For each entry: plane_id, title, horiz_pos_label, horiz_neg_label, vert_pos_label, vert_neg_label
+PLANE_DEFS: list[tuple[Plane, str, str, str, str, str]] = [
+    ("XZ", "Top-Down View (XZ)", "X+", "X-", "Z-", "Z+"),
+    ("XY", "Front View (XY)", "X+", "X-", "Y+", "Y-" ),
+    ("ZY", "Side View (ZY)", "Z+", "Z-", "Y+", "Y-"),
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -30,15 +46,18 @@ class Theme:
     PANEL_BORDER    = (180, 185, 195)
     DIVIDER         = (195, 200, 210)
     AXIS_LABEL_BG   = (245, 245, 245)
+    VIEW_BORDER     = (160, 165, 175)
+    VIEW_TITLE_BG   = (220, 223, 230)
 
     TRACKER_COLORS: dict[str, tuple[int, int, int]] = {
         "VIVE Ultimate Tracker 1": (230, 159,   0),
         "VIVE Tracker 3.0 MV":        (  0, 114, 178),
+        "VIVE Tracker 3.0 MV": (  0, 114, 178),
         "VIVE Ultimate Tracker 2": (130,   0, 204),
     }
     TRACKER_DEFAULT = (100, 100, 100)
 
-    TRACKER_RADIUS   = 10   # px, filled circle
+    TRACKER_RADIUS   = 10   # px, filled circle 
     TRACKER_OUTLINE  = 2    # px, white ring
     
     FONT_FAMILY = None      # None = pygame default monospace
@@ -67,50 +86,54 @@ class TrackerRenderState:
 #  STATIC SURFACE BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_map_surface(
+def _build_view_surface(
     viewport_w: int,
     viewport_h: int,
     mapper: CoordinateMapper,
     font_axis: pygame.font.Font,
+    font_title : pygame.font.Font,
+    plane_def: tuple[Plane, str, str, str, str, str],
     grid_step_m: float = 0.05,
 ) -> pygame.Surface:
     """
-    Pre-render the map background: fill, grid, axes, metric labels.
-    Returns a converted Surface ready for fast blitting.
+    Pre-render one view: fill, grid, axes, metric labels, title bar.
     """
+
+    plane_id, title, h_pos, h_neg, v_pos, v_neg = plane_def
+
     surf = pygame.Surface((viewport_w, viewport_h))
     surf.fill(Theme.BG)
 
     cx = viewport_w // 2
     cy = viewport_h // 2
 
-    step_px_x, step_px_z = mapper.grid_spacing_pixels(grid_step_m)
+    step_px_h, step_px_v = mapper.grid_spacing_pixels(grid_step_m)
 
     # ── grid ───────────────────────────────────────────────────────────────
-    x = cx % step_px_x
+    x = cx % step_px_h
     while x <= viewport_w:
         pygame.draw.line(surf, Theme.GRID, (int(x), 0), (int(x), viewport_h), 1)
-        x += step_px_x
+        x += step_px_h
 
-    y = cy % step_px_z
+    y = cy % step_px_v
     while y <= viewport_h:
         pygame.draw.line(surf, Theme.GRID, (0, int(y)), (viewport_w, int(y)), 1)
-        y += step_px_z
+        y += step_px_v
 
     # ── axes ───────────────────────────────────────────────────────────────
     pygame.draw.line(surf, Theme.AXES, (0, cy), (viewport_w, cy), 2)   # Z axis
     pygame.draw.line(surf, Theme.AXES, (cx, 0), (cx, viewport_h), 2)   # X axis
 
     # ── metric tick labels ─────────────────────────────────────────────────
-    world_range_x = mapper.world_range_x
-    world_range_z = mapper.world_range_z
+    world_range_h = mapper.world_range_h
+    world_range_v = mapper.world_range_v
 
     # X ticks (horizontal)
     m = grid_step_m
-    while m <= world_range_x:
+    while m <= world_range_h:
         for sign in (-1, 1):
             val = sign * m
-            px = cx + int(val * mapper.scale_x)
+            px = cx + int(val * mapper.scale_h)
             if 0 <= px <= viewport_w:
                 pygame.draw.line(surf, Theme.AXES, (px, cy - 5), (px, cy + 5), 1)
                 label = f"{abs(val) * 100:.0f} cm" if abs(val) >= 0.01 else "0 cm"
@@ -119,11 +142,12 @@ def _build_map_surface(
         m += grid_step_m
 
     # Z ticks (vertical)
+    max_v_m = (viewport_h / 2) / mapper.scale_v
     m = grid_step_m
-    while m <= world_range_z:
+    while m <= world_range_v:
         for sign in (-1, 1):
             val = sign * m
-            py = cy + int(val * mapper.scale_z)
+            py = cy + int(val * mapper.scale_v)
             if 0 <= py <= viewport_h:
                 pygame.draw.line(surf, Theme.AXES, (cx - 5, py), (cx + 5, py), 1)
                 label = f"{abs(val) * 100:.0f} cm" if abs(val) >= 0.01 else "0 cm"
@@ -134,19 +158,34 @@ def _build_map_surface(
     # ── axis direction labels ──────────────────────────────────────────────
     margin = 10
     for text, pos in [
-        ("X+", (viewport_w - margin - font_axis.size("X+")[0], cy + 6)),
-        ("X−", (margin, cy + 6)),
-        ("Z-", (cx + 6, margin)),
-        ("Z+", (cx + 6, viewport_h - margin - font_axis.get_height())),
+        (h_pos, (viewport_w - margin - font_axis.size(h_pos)[0], cy + 6)),
+        (h_neg, (margin, cy + 6)),
+        (v_pos, (cx + 6, margin + _TITLE_BAR_H + 4)),
+        (v_neg, (cx + 6, viewport_h - margin - font_axis.get_height())),
     ]:
         lbl = font_axis.render(text, True, Theme.AXES)
         surf.blit(lbl, pos)
 
+    # ── title bar ───────────────────────────────────────────────────────────
+    title_bar = pygame.Rect(0, 0, viewport_w, _TITLE_BAR_H)
+    pygame.draw.rect(surf, Theme.VIEW_TITLE_BG, title_bar)
+    pygame.draw.line(surf, Theme.VIEW_BORDER, (0, _TITLE_BAR_H -1), (viewport_w, _TITLE_BAR_H -1), 1)
+
+    t_surf = font_title.render(title, True, Theme.TEXT)
+    surf.blit(t_surf, (
+        (viewport_w - t_surf.get_width()) // 2,
+        (_TITLE_BAR_H - t_surf.get_height()) // 2,
+    ))
+
+    # ── outer border ───────────────────────────────────────────────────────────
+    pygame.draw.rect(surf, Theme.VIEW_BORDER, pygame.Rect(0, 0, viewport_w, viewport_h), 1)
+
     return surf.convert()
+
+_TITLE_BAR_H = 24 # px reserved for the plane title
 
 
 def _build_panel_surface(
-    panel_x: int,
     panel_w: int,
     win_h: int,
     font_title: pygame.font.Font,
@@ -178,14 +217,14 @@ class PygameViewer:
     """
 
     TARGET_FPS      = 90
-    WORLD_RANGE_X   = 0.250 # metres visible left/right of origin 
-    WORLD_RANGE_Z   = 0.250 # metres visible above/below origin 
-    PANEL_RATIO     = 0.25  # fraction of window width for the right panel
+    WORLD_RANGE   = 0.250 # metres visible left/right of origin 
+    PANEL_RATIO     = 0.22  # fraction of window width for the right panel
+    TRAIL_LENGTH = 80
 
     def __init__(
         self,
         tracker_sources: Sequence[BaseTracker],
-        window_size: tuple[int, int] = (1280, 720),
+        window_size: tuple[int, int] = (1000, 1000),
     ):
         self._sources      = tracker_sources
         self._window_size  = window_size
@@ -194,12 +233,18 @@ class PygameViewer:
         # These are initialized in _init_pygame()
         self._screen:       pygame.Surface | None = None
         self._clock:        pygame.time.Clock | None = None
-        self._mapper:       CoordinateMapper | None = None
         self._render_states: list[TrackerRenderState] = []
 
+        # One mapper per plane
+        self._mappers: dict[Plane, CoordinateMapper] = {}
+
+        self.orientation_mode = OrientationMode.QUATERNION
+
         # Cached static surfaces
-        self._map_surf:    pygame.Surface | None = None
+        self._view_surfs: dict[Plane, pygame.Surface] = {}
+        self._view_rects: dict[Plane, pygame.Rect] = {}
         self._panel_surf:  pygame.Surface | None = None
+        self._panel_rect: pygame.Rect     | None = None
 
         # Fonts (created once)
         self._font_title:  pygame.font.Font | None = None
@@ -208,9 +253,6 @@ class PygameViewer:
         self._font_axis:   pygame.font.Font | None = None
         self._font_fps:    pygame.font.Font | None = None
 
-        # Layout rects computed in _compute_layout()
-        self._map_rect:   pygame.Rect | None = None
-        self._panel_rect: pygame.Rect | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -227,36 +269,57 @@ class PygameViewer:
             self._shutdown()
 
     def update(self) -> None:
-        """Poll all tracker sources and compute screen positions."""
+        """Poll all tracker sources and compute screen positions for each plane."""
         for rs in self._render_states:
             rs.update()
-            if rs.data.get("tracking"):
-                rs.screen_pos = self._mapper.world_to_screen(
-                    rs.data["x"], rs.data["z"]
-                )
 
     def render(self) -> None:
         """Blit static surfaces, then draw dynamic elements on top."""
         screen = self._screen
 
-        # 1. Map background (pre-rendered)
-        screen.blit(self._map_surf, self._map_rect.topleft)
+        screen.fill((210, 214, 220))
 
-        # 2. Tracker markers
-        for rs in self._render_states:
-            if rs.data.get("tracking"):
-                self._draw_tracker_marker(rs)
+        # 1. Each view
+        for plane_id, plane_def in zip(
+            [p[0] for p in PLANE_DEFS], PLANE_DEFS
+        ):
+            rect = self._view_rects[plane_id]
+            screen.blit(self._view_surfs[plane_id], rect.topleft)
 
-        # 3. Panel background (pre-rendered)
+            for rs in self._render_states:
+                if rs.data.get("tracking"):
+                    mapper = self._mappers[plane_id]
+
+                    TrackerRenderer.draw_trail(
+                        screen=self._screen,
+                        history=rs.history,
+                        color=rs.color,
+                        mapper=mapper,
+                        clip_rect=rect,
+                        title_bar_height=_TITLE_BAR_H,
+                    )
+
+                    TrackerRenderer.draw(
+                        screen=self._screen,
+                        tracker_data=rs.data,
+                        color=rs.color,
+                        mapper=mapper,
+                        clip_rect=rect,
+                        title_bar_height=_TITLE_BAR_H,
+                        orientation_mode=self.orientation_mode,
+                    )
+
+        # 2. Panel background 
         screen.blit(self._panel_surf, self._panel_rect.topleft)
 
-        # 4. Live panel text
+        # 3. Panel text
         self._draw_panel_text()
 
-        # 5. FPS overlay (top-left of map)
+        # 5. FPS overlay (top-left of first view)
+        first_rect = self._view_rects[PLANE_DEFS[0][0]]
         fps = self._clock.get_fps()
         fps_surf = self._font_fps.render(f"FPS {fps:.0f}", True, Theme.TEXT_DIM)
-        screen.blit(fps_surf, (self._map_rect.x + 8, self._map_rect.y + 6))
+        screen.blit(fps_surf, (first_rect.x + 8, first_rect.y + _TITLE_BAR_H + 4))
 
         pygame.display.flip()
 
@@ -284,10 +347,19 @@ class PygameViewer:
         self._font_fps    = pygame.font.SysFont(fam, 16)
 
     def _compute_layout(self, win_w: int, win_h: int) -> None:
+        GAP = 12
         panel_w = max(240, int(win_w * self.PANEL_RATIO))
-        map_w   = win_w - panel_w
-        self._map_rect   = pygame.Rect(0, 0, map_w, win_h)
-        self._panel_rect = pygame.Rect(map_w, 0, panel_w, win_h)
+        views_w = win_w - panel_w - (GAP * 4)
+        view_w  = views_w // 3
+
+        view_widths = [view_w, view_w, views_w -2 * view_w]
+
+        x = GAP
+        for i, (plane_id, *_) in enumerate(PLANE_DEFS):
+            self._view_rects[plane_id] = pygame.Rect(x, GAP, view_w, win_h - (GAP * 2))
+            x += view_w + GAP
+
+        self._panel_rect = pygame.Rect(x, 0, panel_w, win_h)
 
     def _build_render_states(self) -> None:
         self._render_states = []
@@ -295,25 +367,39 @@ class PygameViewer:
             data  = src.get_data()
             name  = data.get("name", "Unknown")
             color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
-            self._render_states.append(TrackerRenderState(src, color))
+            self._render_states.append(
+                TrackerRenderState(src, color, history_length=self.TRAIL_LENGTH)
+            )
 
     def _rebuild_static_surfaces(self) -> None:
-        mr = self._map_rect
-        pr = self._panel_rect
+        for plane_def in PLANE_DEFS:
+            plane_id = plane_def[0]
+            rect = self._view_rects[plane_id]
 
-        self._mapper = CoordinateMapper(
-            viewport_x=mr.x, viewport_y=mr.y,
-            viewport_w=mr.w, viewport_h=mr.h,
-            world_range_x=self.WORLD_RANGE_X,
-            world_range_z=self.WORLD_RANGE_Z,
-        )
+            mapper = CoordinateMapper(
+                viewport_x = rect.x,
+                viewport_y = rect.y,
+                viewport_w = rect.w,
+                viewport_h = rect.h,
+                world_range_h = self.WORLD_RANGE,
+                world_range_v = self.WORLD_RANGE,
+                plane = plane_id,
+            )
+            self._mappers[plane_id] = mapper
 
-        self._map_surf = _build_map_surface(
-            mr.w, mr.h, self._mapper, self._font_axis,
-            grid_step_m=0.05,
-        )
+            self._view_surfs[plane_id] = _build_view_surface(
+                rect.w, rect.h,
+                mapper,
+                self._font_axis,
+                self._font_title,
+                plane_def,
+                grid_step_m = 0.05
+            )
+
         self._panel_surf = _build_panel_surface(
-            pr.x, pr.w, pr.h, self._font_title
+            self._panel_rect.w,
+            self._panel_rect.h,
+            self._font_title
         )
 
     # ── private: event handling ──────────────────────────────────────────────
@@ -325,7 +411,7 @@ class PygameViewer:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self._running = False
-                if event.key == pygame.K_r:
+                if event.key == pygame.K_c:
                     print("Reset origin requested")
                     for rs in self._render_states:
                         rs.source.reset_origin()
@@ -395,9 +481,9 @@ class PygameViewer:
             y += self._font_value.get_height() + 10
 
             # Position
-            tittle = self._font_value.render("Position:", True, (75, 75, 75))
-            surf.blit(tittle, (pr.x + pad, pr.y + y))
-            y += tittle.get_height() + 3
+            title = self._font_value.render("Position:", True, (75, 75, 75))
+            surf.blit(title, (pr.x + pad, pr.y + y))
+            y += title.get_height() + 3
 
             # X / Y / Z
             for axis in ("x", "y", "z"):
@@ -408,9 +494,9 @@ class PygameViewer:
 
             # Quaternion
             y += 8
-            tittle = self._font_value.render("Rotation (quat):", True, (75, 75, 75))
-            surf.blit(tittle, (pr.x + pad, pr.y + y))
-            y += tittle.get_height() + 3
+            title = self._font_value.render("Rotation (quat):", True, (75, 75, 75))
+            surf.blit(title, (pr.x + pad, pr.y + y))
+            y += title.get_height() + 3
 
             # Quaternion
             for axis in ("qx", "qy", "qz", "qw"):
@@ -450,16 +536,3 @@ class PygameViewer:
         for rs in self._render_states:
             rs.source.shutdown()
         pygame.quit()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _color_label(color: tuple[int, int, int]) -> str:
-    """Return a human-readable colour name for known tracker colours."""
-    _map = {
-        (230, 159,   0): "Orange",
-        (  0, 114, 178): "Blue",
-    }
-    return _map.get(color, f"RGB{color}")

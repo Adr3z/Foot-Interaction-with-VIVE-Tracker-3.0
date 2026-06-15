@@ -3,17 +3,22 @@ coordinate_mapper.py
 --------------------
 Converts VR world-space coordinates (metres) to Pygame screen pixels.
 
+Coordinate conventions
     +X  →  right
-    +Y  →  up        (not shown on the X-Z map)
+    +Y  →  up
     +Z  →  backward (toward user)
 
-Map convention (Cartesian display):
-    Horizontal axis  →  X  (right = +X)
-    Vertical   axis  →  Z  (up on screen = -Z, i.e. away from user)
+Projections rendered:
+    XZ plane - top-down view (horiz=X, vert=Z)
+    XY plane - front-on view (horiz=X, vert=Y)
+    ZY plane - right-side view (horiz=Z, vert=Y)
 """
 
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Literal
+
+Plane = Literal["XZ", "XY", "ZY"]
 
 
 @dataclass
@@ -27,19 +32,21 @@ class CoordinateMapper:
         Top-left corner of the drawable viewport in window pixels.
     viewport_w, viewport_h : int
         Pixel dimensions of the viewport.
-    world_range_x : float
-        Half-width of the world region to display, in metres.
-        E.g. 2.0 means the map shows X ∈ [-2, +2].
-    world_range_z : float
-        Half-height of the world region to display, in metres.
+    world_range_h : float
+        Half-width of the world region shown in the horizontal screen axis.
+    world_range_v : float
+        Half-height of the world region shown on the vertical screen axis.
+    plane : Plane
+        Which plane of the world to project onto the screen.
     """
 
     viewport_x: int
     viewport_y: int
     viewport_w: int
     viewport_h: int
-    world_range_x: float = 0.250
-    world_range_z: float = 0.250
+    world_range_h: float = 0.300
+    world_range_v: float = 0.300
+    plane: Plane = "XZ"
 
     # ── derived properties ──────────────────────────────────────────────────
 
@@ -52,35 +59,51 @@ class CoordinateMapper:
         )
 
     @property
-    def scale_x(self) -> float:
-        """Pixels per metre along the X axis."""
-        return self.viewport_w / (2.0 * self.world_range_x)
+    def scale_h(self) -> float:
+        """Pixels per metre along the horizontal axis."""
+        return self.viewport_w / (2.0 * self.world_range_h)
 
     @property
-    def scale_z(self) -> float:
-        """Pixels per metre along the Z axis."""
-        return self.viewport_h / (2.0 * self.world_range_z)
+    def scale_v(self) -> float:
+        """Pixels per metre along the vertical axis."""
+        return self.scale_h
 
     # ── public API ──────────────────────────────────────────────────────────
 
-    def world_to_screen(self, x: float, z: float) -> tuple[int, int]:
+    def world_to_screen(self, x: float, y: float, z: float) -> tuple[int, int]:
         """
-        Convert world (x, z) in metres to screen (px, py) in pixels.
+        Convert world (x, y, z) in metres to screen (px, py) in pixels according to this mapper's plane.
 
-        Z is negated so that +Z (toward the user) maps downward on screen,
-        matching the standard Cartesian orientation where +Z-away is "up".
+        Screen Y is inverted for XY and ZY planes so that +Y maps upward.
         """
         ox, oy = self.origin_px
-        px = int(ox + x * self.scale_x)
-        py = int(oy + z * self.scale_z)   
+        
+        if self.plane == "XZ":
+            # horiz = X, vert = Z 
+            px = int(ox + x* self.scale_h)
+            py = int(oy +z * self.scale_v)
+        elif self.plane == "XY":
+            # horiz = X, vert = Y (invert Y for screen)
+            px = int(ox + x * self.scale_h)
+            py = int(oy - y * self.scale_v)
+        elif self.plane == "ZY":
+            # horiz = Z, vert = Y
+            px = int(ox + z * self.scale_h)
+            py = int(oy - y * self.scale_v)
+        else:
+            raise ValueError(f"Invalid plane: {self.plane}")
+
         return px, py
 
     def screen_to_world(self, px: int, py: int) -> tuple[float, float]:
-        """Inverse mapping — useful for future interaction (e.g. click-to-place)."""
+        """ Mapping for the two axes of this plane. Returns (horiz, vert) in metres. """
         ox, oy = self.origin_px
-        x = (px - ox) / self.scale_x
-        z = (py - oy) / self.scale_z
-        return x, z
+        h = (px - ox) / self.scale_h
+        v = (py - oy) / self.scale_v
+
+        if self.plane in ("XY", "ZY"):
+            v= -v
+        return h, v
 
     def update_viewport(
         self,
@@ -97,9 +120,9 @@ class CoordinateMapper:
 
     def world_distance_to_pixels(self, metres: float) -> int:
         """Convert a world-space distance to an average pixel count."""
-        avg_scale = (self.scale_x + self.scale_z) / 2.0
+        avg_scale = (self.scale_h + self.scale_v) / 2.0
         return max(1, int(metres * avg_scale))
 
     def grid_spacing_pixels(self, grid_step_m: float = 0.025) -> tuple[float, float]:
         """Returns (px_per_step_x, px_per_step_z) for a given grid step in metres."""
-        return self.scale_x * grid_step_m, self.scale_z * grid_step_m
+        return self.scale_h * grid_step_m, self.scale_v * grid_step_m

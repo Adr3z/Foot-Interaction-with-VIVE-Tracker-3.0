@@ -38,10 +38,10 @@ class BaseTracker(ABC):
                 "x":         float, # metres, world space
                 "y":         float,
                 "z":         float,
-                "qx":         float, # rotation as quaternion
-                "qy":         float,
-                "qz":         float,
-                "qw":         float,
+                "qx":        float, # rotation as quaternion
+                "qy":        float,
+                "qz":        float,
+                "qw":        float,
             }
         """
 
