@@ -17,10 +17,14 @@ Renders three projections side by side:
 from __future__ import annotations
 
 import pygame
+from collections import deque
 from typing import Sequence
 
 from ..tracker.openvr_tracker import BaseTracker
 from ..utils.coordinate_mapper import CoordinateMapper
+from .tracker_renderer import TrackerRenderer, OrientationMode
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 #  PLANE DEFINITIONS
 # ──────────────────────────────────────────────────────────────────────────────
@@ -45,13 +49,11 @@ class Theme:
     PANEL_BG        = (232, 235, 240)
     PANEL_BORDER    = (180, 185, 195)
     DIVIDER         = (195, 200, 210)
-    AXIS_LABEL_BG   = (245, 245, 245)
     VIEW_BORDER     = (160, 165, 175)
     VIEW_TITLE_BG   = (220, 223, 230)
 
     TRACKER_COLORS: dict[str, tuple[int, int, int]] = {
         "VIVE Ultimate Tracker 1": (230, 159,   0),
-        "VIVE Tracker 3.0 MV":        (  0, 114, 178),
         "VIVE Tracker 3.0 MV": (  0, 114, 178),
         "VIVE Ultimate Tracker 2": (130,   0, 204),
     }
@@ -68,18 +70,24 @@ class Theme:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TrackerRenderState:
-    """Lightweight container updated each frame from a BaseTracker."""
+    """Holds latest tracker data + per-plane screen positions"""
 
-    __slots__ = ("source", "color", "data", "screen_pos")
+    __slots__ = ("source", "color", "data", "history",)
 
-    def __init__(self, source: BaseTracker, color: tuple[int, int, int]):
+    def __init__(self, source: BaseTracker, color: tuple[int, int, int], history_length: int = 80):
         self.source     = source
         self.color      = color
         self.data: dict = {}
-        self.screen_pos: tuple[int, int] = (0, 0)
+        self.history: deque[dict[str, float]] = deque(maxlen=history_length)
 
     def update(self) -> None:
         self.data = self.source.get_data()
+        if self.data.get("tracking"):
+            self.history.append({
+                "x": self.data.get("x", 0.0),
+                "y": self.data.get("y", 0.0),
+                "z": self.data.get("z", 0.0),
+            })
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -415,30 +423,19 @@ class PygameViewer:
                     print("Reset origin requested")
                     for rs in self._render_states:
                         rs.source.reset_origin()
+                if event.key == pygame.K_o:
+                    if self.orientation_mode == OrientationMode.QUATERNION:
+                        self.orientation_mode = OrientationMode.EULER
+                    else:
+                        self.orientation_mode = OrientationMode.QUATERNION
+                    print(f"Orientation Mode: " 
+                            f"{self.orientation_mode.name}")
             elif event.type == pygame.VIDEORESIZE:
                 self._window_size = (event.w, event.h)
                 self._compute_layout(event.w, event.h)
                 self._rebuild_static_surfaces()
 
     # ── private: drawing helpers ─────────────────────────────────────────────
-
-    def _draw_tracker_marker(self, rs: TrackerRenderState) -> None:
-        px, py = rs.screen_pos
-        r  = Theme.TRACKER_RADIUS
-
-        # Clip to map area
-        if not self._map_rect.collidepoint(px, py):
-            return
-
-        # Shadow / depth ring
-        pygame.draw.circle(self._screen, (200, 200, 200), (px + 2, py + 2), r)
-
-        # Filled circle
-        pygame.draw.circle(self._screen, rs.color, (px, py), r)
-
-        # White outline
-        pygame.draw.circle(self._screen, (255, 255, 255), (px, py), r,
-                        Theme.TRACKER_OUTLINE)
 
     def _draw_panel_text(self) -> None:
         pr   = self._panel_rect
