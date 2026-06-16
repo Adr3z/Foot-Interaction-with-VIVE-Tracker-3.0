@@ -52,6 +52,11 @@ class Theme:
     VIEW_BORDER     = (160, 165, 175)
     VIEW_TITLE_BG   = (220, 223, 230)
 
+    CARD_BG         = (255, 255, 255)
+    CARD_BORDER     = (218, 222, 230)
+    GREEN_CONN      = (20, 165, 90)
+    BLUE_ACTIVE     = (40, 90, 230)
+
     TRACKER_COLORS: dict[str, tuple[int, int, int]] = {
         "VIVE Ultimate Tracker 1": (230, 159,   0),
         "VIVE Tracker 3.0 MV": (  0, 114, 178),
@@ -111,6 +116,8 @@ def _build_view_surface(
 
     surf = pygame.Surface((viewport_w, viewport_h))
     surf.fill(Theme.BG)
+    # canvas = pygame.Surface((viewport_w, viewport_h))
+    # canvas.fill(Theme.BG)
 
     cx = viewport_w // 2
     cy = viewport_h // 2
@@ -180,17 +187,14 @@ def _build_view_surface(
     pygame.draw.line(surf, Theme.VIEW_BORDER, (0, _TITLE_BAR_H -1), (viewport_w, _TITLE_BAR_H -1), 1)
 
     t_surf = font_title.render(title, True, Theme.TEXT)
-    surf.blit(t_surf, (
-        (viewport_w - t_surf.get_width()) // 2,
-        (_TITLE_BAR_H - t_surf.get_height()) // 2,
-    ))
+    surf.blit(t_surf, ((viewport_w - t_surf.get_width()) // 2, (_TITLE_BAR_H - t_surf.get_height()) // 2))
 
     # ── outer border ───────────────────────────────────────────────────────────
     pygame.draw.rect(surf, Theme.VIEW_BORDER, pygame.Rect(0, 0, viewport_w, viewport_h), 1)
 
     return surf.convert()
 
-_TITLE_BAR_H = 24 # px reserved for the plane title
+_TITLE_BAR_H = 32 # px reserved for the plane title
 
 
 def _build_panel_surface(
@@ -205,12 +209,6 @@ def _build_panel_surface(
     surf = pygame.Surface((panel_w, win_h))
     surf.fill(Theme.PANEL_BG)
     pygame.draw.line(surf, Theme.PANEL_BORDER, (0, 0), (0, win_h), 2)
-
-    title = font_title.render("Tracker Status", True, Theme.TEXT)
-    surf.blit(title, (16, 16))
-
-    line_y = 16 + title.get_height() + 10
-    pygame.draw.line(surf, Theme.DIVIDER, (16, line_y), (panel_w - 16, line_y), 1)
 
     return surf.convert()
 
@@ -254,12 +252,16 @@ class PygameViewer:
         self._panel_surf:  pygame.Surface | None = None
         self._panel_rect: pygame.Rect     | None = None
 
+        # Runtime options
+        self.show_trail = True
+
         # Fonts (created once)
         self._font_title:  pygame.font.Font | None = None
         self._font_body:   pygame.font.Font | None = None
         self._font_value:  pygame.font.Font | None = None
         self._font_axis:   pygame.font.Font | None = None
         self._font_fps:    pygame.font.Font | None = None
+        
 
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -298,14 +300,15 @@ class PygameViewer:
                 if rs.data.get("tracking"):
                     mapper = self._mappers[plane_id]
 
-                    TrackerRenderer.draw_trail(
-                        screen=self._screen,
-                        history=rs.history,
-                        color=rs.color,
-                        mapper=mapper,
-                        clip_rect=rect,
-                        title_bar_height=_TITLE_BAR_H,
-                    )
+                    if self.show_trail:
+                        TrackerRenderer.draw_trail(
+                            screen=self._screen,
+                            history=rs.history,
+                            color=rs.color,
+                            mapper=mapper,
+                            clip_rect=rect,
+                            title_bar_height=_TITLE_BAR_H,
+                        )
 
                     TrackerRenderer.draw(
                         screen=self._screen,
@@ -349,10 +352,12 @@ class PygameViewer:
     def _init_fonts(self) -> None:
         fam = Theme.FONT_FAMILY
         self._font_title  = pygame.font.SysFont(fam, 30)
-        self._font_body   = pygame.font.SysFont(fam, 25)
+        self._font_body   = pygame.font.SysFont(fam, 21)
         self._font_value  = pygame.font.SysFont(fam, 21)
         self._font_axis   = pygame.font.SysFont(fam, 16)
         self._font_fps    = pygame.font.SysFont(fam, 16)
+        self._font_large  = pygame.font.SysFont(fam, 16)
+        self._font_section= pygame.font.SysFont(fam, 21)
 
     def _compute_layout(self, win_w: int, win_h: int) -> None:
         GAP = 12
@@ -419,6 +424,9 @@ class PygameViewer:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self._running = False
+                if event.key == pygame.K_1:
+                    self.show_trail = not self.show_trail
+                    print(f"Trail {'enabled' if self.show_trail else 'disabled'}")
                 if event.key == pygame.K_c:
                     print("Reset origin requested")
                     for rs in self._render_states:
@@ -436,15 +444,21 @@ class PygameViewer:
                 self._rebuild_static_surfaces()
 
     # ── private: drawing helpers ─────────────────────────────────────────────
+    def _draw_card_background(self, x: int, y: int, w: int, h: int) -> None:
+        """ Draws clean background cards matching the structured UI spec template """
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(self._screen, Theme.CARD_BG, rect, border_radius=8)
+        pygame.draw.rect(self._screen, Theme.CARD_BORDER, rect, width=1, border_radius=8)
 
     def _draw_panel_text(self) -> None:
         pr   = self._panel_rect
         surf = self._screen
         pad  = 18
 
-        # Starting Y below the pre-rendered title + divider
-        y = 16 + self._font_title.get_height() + 20
+        card_w = pr.w - (pad * 2)
 
+        # Starting Y below the pre-rendered title + divider
+        y=8
         for i, rs in enumerate(self._render_states):
             data = rs.data
             if not data:
@@ -454,78 +468,95 @@ class PygameViewer:
             connected  = data.get("connected", False)
             tracking   = data.get("tracking", False)
 
-            # Tracker name (coloured)
-            name_surf = self._font_body.render(name, True, rs.color)
-            surf.blit(name_surf, (pr.x + pad, pr.y + y))
-            y += name_surf.get_height() + 6
+            # ── SECTION 1: TRACKER INFO CARD ──────────────────────────────────
+            section_title = self._font_section.render("Tracker Info", True, Theme.TEXT)
+            surf.blit(section_title, (pr.x + pad, y))
+            y += section_title.get_height() + 12
 
-            # Color label
-            # color_name = _color_label(rs.color)
-            # self._blit_kv("Color",     color_name,
-            #               pr.x + pad, pr.y + y, surf)
-            # y += self._font_value.get_height() + 3
+            self._draw_card_background(pr.x + pad, y, card_w, 105)
+            
+            # Model Title using individual Tracker Identifier Color
+            self._blit_row("Model", name, pr.x + pad + 14, y + 14, card_w - 28, val_color=rs.color)
+            
+            # Connection Status
+            conn_text = "Connected" if connected else "Disconnected"
+            self._blit_row("Connection", conn_text, pr.x + pad + 14, y + 42, card_w - 28, val_color=Theme.GREEN_CONN)
+            
+            # Tracking Action State
+            track_text = "Active" if tracking else "Lost"
+            self._blit_row("Tracking", track_text, pr.x + pad + 14, y + 70, card_w - 28, val_color=Theme.BLUE_ACTIVE)
+            
+            # Battery Placeholder Mimic
+            # batt_lbl = self._font_value.render("Battery Status", True, Theme.TEXT_DIM)
+            # surf.blit(batt_lbl, (pr.x + pad + 14, y + 98))
+            # pygame.draw.rect(surf, (220, 225, 235), (pr.x + pad + 14, y + 116, card_w - 28, 6), border_radius=3)
+            # pygame.draw.rect(surf, Theme.BLUE_ACTIVE, (pr.x + pad + 14, y + 116, int((card_w - 28) * 0.85), 6), border_radius=3)
+            
+            y += 100 + 24
 
-            # Connected
-            conn_str = "Yes" if connected else "No"
-            self._blit_kv("Connected", conn_str,
-                        pr.x + pad, pr.y + y, surf)
-            y += self._font_value.get_height() + 3
+            # ── SECTION 2: POSITION DATA CARD (METRES -> MILLIMETRES) ─────────
+            pos_title = self._font_section.render("Position Data (cm)", True, Theme.TEXT)
+            surf.blit(pos_title, (pr.x + pad, y))
+            y += pos_title.get_height() + 12
 
-            # Tracking
-            track_str = "Active" if tracking else "Lost"
-            self._blit_kv("Tracking",  track_str,
-                        pr.x + pad, pr.y + y, surf)
-            y += self._font_value.get_height() + 10
+            # Render 3 horizontal component blocks
+            box_w = (card_w - 16) // 3
+            coords = [("X", data.get("x", 0.0)), ("Y", data.get("y", 0.0)), ("Z", data.get("z", 0.0))]
+            
+            for idx, (axis, val) in enumerate(coords):
+                box_x = pr.x + pad + (idx * (box_w + 8))
+                self._draw_card_background(box_x, y, box_w, 50)
+                
+                ax_lbl = self._font_fps.render(axis, True, Theme.TEXT_DIM)
+                surf.blit(ax_lbl, (box_x + (box_w - ax_lbl.get_width()) // 2, y + 8))
+                
+                # Conversion to cm
+                mm_val = f"{val * 100:,.1f}"
+                val_lbl = self._font_large.render(mm_val, True, Theme.TEXT)
+                surf.blit(val_lbl, (box_x + (box_w - val_lbl.get_width()) // 2, y + 30))
+                
+            y += 50 + 24
 
-            # Position
-            title = self._font_value.render("Position:", True, (75, 75, 75))
-            surf.blit(title, (pr.x + pad, pr.y + y))
-            y += title.get_height() + 3
+            # ── SECTION 3: ORIENTATION DATA CARD ──────────────────────────────
+            rot_title = self._font_section.render("Orientation (Quat)", True, Theme.TEXT)
+            surf.blit(rot_title, (pr.x + pad, y))
+            y += rot_title.get_height() + 12
 
-            # X / Y / Z
-            for axis in ("x", "y", "z"):
-                val = data.get(axis, 0.0)
-                self._blit_kv(axis.upper(), f"{val:+.3f} m",
-                            pr.x + pad, pr.y + y, surf)
-                y += self._font_value.get_height() + 3
+            self._draw_card_background(pr.x + pad, y, card_w, 80)
+            quat_axes = [("QX", data.get("qx", 0.0)), ("QY", data.get("qy", 0.0)), 
+                        ("QZ", data.get("qz", 0.0)), ("QW", data.get("qw", 0.0))]
+            
+            for idx, (q_ax, q_val) in enumerate(quat_axes):
+                r_row = idx // 2
+                r_col = idx % 2
+                item_w = (card_w - 28) // 2
+                ix = pr.x + pad + 14 + (r_col * (item_w + 8))
+                iy = y + 14 + (r_row * 36)
+                
+                # Internal sub-key matching reference layout
+                lbl = self._font_body.render(f"{q_ax}   {q_val: .3f}", True, Theme.TEXT)
+                surf.blit(lbl, (ix, iy))
 
-            # Quaternion
-            y += 8
-            title = self._font_value.render("Rotation (quat):", True, (75, 75, 75))
-            surf.blit(title, (pr.x + pad, pr.y + y))
-            y += title.get_height() + 3
+            y += 80 + 24
 
-            # Quaternion
-            for axis in ("qx", "qy", "qz", "qw"):
-                val = data.get(axis, 0.0)
-                self._blit_kv(axis.upper(), f"{val:+.3f}",
-                            pr.x + pad, pr.y + y, surf)
-                y += self._font_value.get_height() + 3
+            # ── SECTION 4: SYSTEM STATUS CARD ────────────────────────────────
+            sys_title = self._font_section.render("System Status", True, Theme.TEXT)
+            surf.blit(sys_title, (pr.x + pad, y))
+            y += sys_title.get_height() + 12
 
-            y += 8
+            self._draw_card_background(pr.x + pad, y, card_w, 68)
+            
+            trail_txt = "Enabled" if self.show_trail else "Disabled"
+            trail_color = Theme.GREEN_CONN if self.show_trail else Theme.TEXT_DIM
+            self._blit_row("Trail Status", trail_txt, pr.x + pad + 14, y + 12, card_w - 28, val_color=trail_color)
+            self._blit_row("Recording Status", "Off", pr.x + pad + 14, y + 40, card_w - 28)
 
-            # Divider between trackers
-            if i < len(self._render_states) :
-                pygame.draw.line(
-                    surf, Theme.DIVIDER,
-                    (pr.x + pad, pr.y + y),
-                    (pr.x + pr.w - pad, pr.y + y), 1
-                )
-                y += 16
-
-    def _blit_kv(
-        self,
-        key: str,
-        value: str,
-        x: int,
-        y: int,
-        surf: pygame.Surface,
-    ) -> None:
-        """Render a key: value pair with distinct styling."""
-        k_surf = self._font_value.render(f"{key}:", True, Theme.TEXT_DIM)
-        v_surf = self._font_value.render(value,     True, Theme.TEXT)
-        surf.blit(k_surf, (x, y))
-        surf.blit(v_surf, (x + 88, y))
+    def _blit_row(self, key: str, value: str, x: int, y: int, width: int, val_color=Theme.TEXT) -> None:
+        """ Helper utility layout to split standard metric lines seamlessly across the UI width """
+        k_surf = self._font_body.render(key, True, Theme.TEXT_DIM)
+        v_surf = self._font_body.render(value, True, val_color)
+        self._screen.blit(k_surf, (x, y))
+        self._screen.blit(v_surf, (x + width - v_surf.get_width(), y))
 
     # ── private: shutdown ────────────────────────────────────────────────────
 
