@@ -11,10 +11,37 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import pygame
 
-from ..utils.coordinate_mapper import CoordinateMapper
+from ..utils import CoordinateMapper
 
 from enum import Enum, auto
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  TRACKER RENDER STATE  (holds latest data + colour, no rendering logic)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TrackerRenderState:
+    """Holds latest tracker data + per-plane screen positions"""
+
+    __slots__ = ("source", "color", "data", "history",)
+
+    def __init__(self, source: BaseTracker, color: tuple[int, int, int], history_length: int = 80):
+        self.source     = source
+        self.color      = color
+        self.data: dict = {}
+        self.history: deque[dict[str, float]] = deque(maxlen=history_length)
+
+    def update(self) -> None:
+        self.data = self.source.get_data()
+        if self.data.get("tracking"):
+            self.history.append({
+                "x": self.data.get("x", 0.0),
+                "y": self.data.get("y", 0.0),
+                "z": self.data.get("z", 0.0),
+            })
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  TRACKER RENDER
+# ──────────────────────────────────────────────────────────────────────────────
 class TrackerRenderer:
     """
     Tracker Drawing logic
