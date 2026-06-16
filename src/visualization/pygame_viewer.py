@@ -23,6 +23,7 @@ from typing import Sequence
 from ..tracker.openvr_tracker import BaseTracker
 from ..utils.coordinate_mapper import CoordinateMapper
 from .tracker_renderer import TrackerRenderer, OrientationMode
+from ..utils.recorder import TrackerRecorder
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -255,6 +256,9 @@ class PygameViewer:
         # Runtime options
         self.show_trail = True
 
+        # Recording 
+        self._recorder = TrackerRecorder()
+
         # Fonts (created once)
         self._font_title:  pygame.font.Font | None = None
         self._font_body:   pygame.font.Font | None = None
@@ -282,6 +286,8 @@ class PygameViewer:
         """Poll all tracker sources and compute screen positions for each plane."""
         for rs in self._render_states:
             rs.update()
+
+        self._recorder.sample(self._render_states)
 
     def render(self) -> None:
         """Blit static surfaces, then draw dynamic elements on top."""
@@ -421,6 +427,7 @@ class PygameViewer:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self._running = False
+
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self._running = False
@@ -438,6 +445,8 @@ class PygameViewer:
                         self.orientation_mode = OrientationMode.QUATERNION
                     print(f"Orientation Mode: " 
                             f"{self.orientation_mode.name}")
+                if event.key == pygame.K_r:
+                    self._recorder.toggle_recording(self._render_states)
             elif event.type == pygame.VIDEORESIZE:
                 self._window_size = (event.w, event.h)
                 self._compute_layout(event.w, event.h)
@@ -549,7 +558,10 @@ class PygameViewer:
             trail_txt = "Enabled" if self.show_trail else "Disabled"
             trail_color = Theme.GREEN_CONN if self.show_trail else Theme.TEXT_DIM
             self._blit_row("Trail Status", trail_txt, pr.x + pad + 14, y + 12, card_w - 28, val_color=trail_color)
-            self._blit_row("Recording Status", "Off", pr.x + pad + 14, y + 40, card_w - 28)
+
+            rec_txt = "RECORDING" if self._recorder.is_recording else "Off"
+            rec_color = (230, 40, 40) if self._recorder.is_recording else Theme.TEXT_DIM
+            self._blit_row("Recording Status", rec_txt, pr.x + pad + 14, y + 40, card_w - 28, val_color=rec_color)
 
     def _blit_row(self, key: str, value: str, x: int, y: int, width: int, val_color=Theme.TEXT) -> None:
         """ Helper utility layout to split standard metric lines seamlessly across the UI width """

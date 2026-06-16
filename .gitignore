@@ -4,3 +4,8 @@
 *.py[cod]
 *$py.class
 
+data/raw
+data/processed
+
+!data/.gitkeep
+
