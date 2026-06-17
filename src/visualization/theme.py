@@ -24,9 +24,10 @@ class Theme:
         "VIVE Tracker 3.0 MV": (  0, 114, 178),
         "VIVE Ultimate Tracker 2": (130,   0, 204),
     }
-    TRACKER_DEFAULT = (100, 100, 100)
+    TRACKER_DEFAULT = ( 102, 0, 102)
 
     TRACKER_RADIUS   = 10   # px, filled circle 
     TRACKER_OUTLINE  = 2    # px, white ring
     
     FONT_FAMILY = None      # None = pygame default monospace
+    ACCENT = ( 102, 0, 102)

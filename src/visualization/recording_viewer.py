@@ -10,6 +10,7 @@ pause/play, seek, restart, and file reload controls.
 from __future__ import annotations
 
 import os
+import numpy as np
 import pygame
 from collections import deque
 from typing import Any
@@ -27,12 +28,15 @@ Plane = str
 # ──────────────────────────────────────────────────────────────────────────────
 class RecordingTrackState:
     """Stores the current playback frame data and trail history for a recorded tracker"""
-    def __init__(self, name: str, color: tuple[int, int, int], history_length: int = 80):
+    def __init__(self, name: str, color: tuple[int, int, int], history_length: int | None = 80):
         self.name = name
         self.color = color
 
         # Recent world-space positions used for trail rendering
-        self.history: deque[dict[str, float]] = deque(maxlen=history_length)
+        if history_length is None or history_length <= 0:
+            self.history: deque[dict[str, float]] = deque()
+        else:
+            self.history: deque[dict[str, float]] = deque(maxlen=history_length)
         # Current frame data
         self.data: dict[str, Any] = {}
 
@@ -58,6 +62,7 @@ class RecordingViewer:
     SEEK_STEP = 0.5
     CONTROL_BUTTON_HEIGHT = 48
     SIDE_PANEL_WIDTH = 210
+    PROGRESS_BAR_HEIGHT = 40
     CONTROL_BAR_HEIGHT = 80
 
     def __init__(
@@ -81,6 +86,7 @@ class RecordingViewer:
 
         # Side panel and control bar layout
         self._panel_rect: pygame.Rect | None = None
+        self._progress_rect: pygame.Rect | None = None
         self._controls_rect: pygame.Rect | None = None
 
         # Clickable control buttons
@@ -91,12 +97,13 @@ class RecordingViewer:
             ("Play/Pause", "toggle"),
             ("<< 0.5s", "rewind"),
             ("0.5s >>", "forward"),
-            ("Restart", "reset"),
+            ("Restart", "restart"),
+            ("Reset", "reset"),
             ("End", "end"),
             ("Toggle Trail", "trail"),
             ("Orientation", "orient"),
+            ("Speed", "speed"),
             ("Load File", "load"),
-
         ]
 
         self._font_title: pygame.font.Font | None = None
@@ -170,6 +177,12 @@ class RecordingViewer:
             pygame.draw.rect(self._screen, Theme.PANEL_BORDER, self._panel_rect, 1)
             self._draw_panel(self._panel_rect)
 
+        # Draw progress bar
+        if self._progress_rect is not None:
+            pygame.draw.rect(self._screen, Theme.PANEL_BG, self._progress_rect)
+            pygame.draw.rect(self._screen, Theme.PANEL_BORDER, self._progress_rect, 1)
+            self._draw_progress_bar(self._progress_rect)
+
         # Draw control bar
         if self._controls_rect is not None:
             pygame.draw.rect(self._screen, Theme.PANEL_BG, self._controls_rect)
@@ -203,7 +216,7 @@ class RecordingViewer:
         for name in self._recording_data.keys():
             color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
             self._track_states.append(
-                RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+                RecordingTrackState(name, color, history_length=None)
             )
 
         return True
@@ -216,7 +229,7 @@ class RecordingViewer:
             for name in self._recording_data.keys():
                 color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
                 self._track_states.append(
-                    RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+                    RecordingTrackState(name, color, history_length=None)
                 )
 
 
@@ -241,7 +254,7 @@ class RecordingViewer:
         for name in self._recording_data.keys():
             color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
             self._track_states.append(
-                RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+                RecordingTrackState(name, color, history_length=None)
             )
 
     # ── initialization ───────────────────────────────────────────────────────
@@ -265,8 +278,8 @@ class RecordingViewer:
         """ Recompute view, panel and control bar layout """
         GAP = 12
 
-        # Available are excluding bottom control bar
-        content_h = win_h - self.CONTROL_BAR_HEIGHT - GAP *3
+        # Available area excluding progress and bottom control bar
+        content_h = win_h - self.CONTROL_BAR_HEIGHT - self.PROGRESS_BAR_HEIGHT - GAP *4
 
         # Divide available width among the three projection views
         views_w = win_w - self.SIDE_PANEL_WIDTH - GAP * 4
@@ -281,8 +294,10 @@ class RecordingViewer:
 
         # Create side information panel
         self._panel_rect = pygame.Rect(x, GAP, self.SIDE_PANEL_WIDTH, content_h)
+        # Create middle progress bar section
+        self._progress_rect = pygame.Rect(GAP, GAP + content_h + GAP, win_w - GAP * 2, self.PROGRESS_BAR_HEIGHT)
         # Create bottom control bar
-        self._controls_rect = pygame.Rect( GAP, win_h - self.CONTROL_BAR_HEIGHT - GAP, win_w - GAP * 2, self.CONTROL_BAR_HEIGHT)
+        self._controls_rect = pygame.Rect(GAP, GAP + content_h + GAP + self.PROGRESS_BAR_HEIGHT + GAP, win_w - GAP * 2, self.CONTROL_BAR_HEIGHT)
 
 
     def _rebuild_static_surfaces(self) -> None:
@@ -352,6 +367,10 @@ class RecordingViewer:
                     self._orientation_mode = toggle_orientation(
                         self._orientation_mode
                     )
+                elif action == "speed":
+                    self._cycle_playback_speed()
+                elif action == "restart":
+                    self._reset_playback()
                 break
 
 
@@ -376,6 +395,7 @@ class RecordingViewer:
             f"File: {file_name}",
             f"Status: {status}",
             f"Time: {current:.2f}s / {duration:.2f}s",
+            f"Speed: {self._playback.speed:.1f}x",
             f"Trail: {'On' if self._show_trail else 'Off'}",
             f"Orientation: {self._orientation_mode.name}",
             "",
@@ -454,10 +474,13 @@ class RecordingViewer:
         self._control_buttons.clear()
 
         for label, key in self._control_labels:
+            if key == "speed" and self._playback is not None:
+                label = f"Speed {self._playback.speed:.1f}x"
+
             rect = pygame.Rect(x, y, button_width, button_height)
-            pygame.draw.rect( self._screen, Theme.CARD_BG, rect, border_radius=8)
+            pygame.draw.rect(self._screen, Theme.CARD_BG, rect, border_radius=8)
             pygame.draw.rect(self._screen, Theme.VIEW_BORDER, rect, 1, border_radius=8)
-            text = self._font_body.render( label, True, Theme.TEXT)
+            text = self._font_body.render(label, True, Theme.TEXT)
             self._screen.blit(text, (rect.x + (rect.w - text.get_width()) // 2, rect.y + (rect.h - text.get_height()) // 2,), )
 
             self._control_buttons[key] = rect
@@ -482,12 +505,71 @@ class RecordingViewer:
         if self._playback is None:
             return
         self._playback.stop()
+        for state in self._track_states:
+            state.history.clear()
 
     def _goto_end(self) -> None:
         if self._playback is None:
             return
         self._playback.set_time(self._playback.duration)
 
+    def _cycle_playback_speed(self) -> None:
+        if self._playback is None:
+            return
+
+        speeds = [0.25, 0.5, 1.0, 1.5, 2.0]
+        current = self._playback.speed
+        try:
+            next_index = (speeds.index(current) + 1) % len(speeds)
+        except ValueError:
+            next_index = 2
+        self._playback.set_speed(speeds[next_index])
+
+    def _get_playback_frame_progress(self) -> tuple[int, int]:
+        if self._playback is None or not self._recording_data:
+            return 0, 0
+
+        longest_track = max(
+            self._recording_data.values(),
+            key=lambda info: len(info.get("time", [])),
+        )
+        timestamps = np.asarray(longest_track["time"], dtype=np.float64)
+        if timestamps.size == 0:
+            return 0, 0
+
+        relative = timestamps - timestamps[0]
+        position = min(self._playback.current_time, relative[-1])
+        index = int(np.searchsorted(relative, position, side="right") - 1)
+        index = max(0, min(index, len(timestamps) - 1))
+        return index + 1, len(timestamps)
+
+    def _draw_progress_bar(self, bar_rect: pygame.Rect) -> None:
+        frame_index, total_frames = self._get_playback_frame_progress()
+        if total_frames == 0:
+            text = "No frames"
+            progress = 0.0
+        else:
+            text = f"Frame {frame_index} / {total_frames}"
+            progress = frame_index / total_frames
+
+        label_surf = self._font_body.render(text, True, Theme.TEXT)
+        label_x = bar_rect.x + 16
+        label_y = bar_rect.y + (bar_rect.h - label_surf.get_height()) // 2
+        self._screen.blit(label_surf, (label_x, label_y))
+
+        progress_margin = 16
+        progress_x = label_x + label_surf.get_width() + 24
+        progress_w = bar_rect.w - (progress_x - bar_rect.x) - progress_margin
+        progress_h = 16
+        progress_y = bar_rect.y + (bar_rect.h - progress_h) // 2
+
+        progress_back = pygame.Rect(progress_x, progress_y, progress_w, progress_h)
+        pygame.draw.rect(self._screen, Theme.CARD_BG, progress_back, border_radius=8)
+        pygame.draw.rect(self._screen, Theme.VIEW_BORDER, progress_back, 1, border_radius=8)
+
+        fill_width = max(0, min(progress_w, int(progress_w * progress)))
+        progress_fill = pygame.Rect(progress_x, progress_y, fill_width, progress_h)
+        pygame.draw.rect(self._screen, Theme.ACCENT, progress_fill, border_radius=8)
 
     # ── shutdown ─────────────────────────────────────────────────────────────
     def _shutdown(self) -> None:
