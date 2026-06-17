@@ -31,12 +31,14 @@ class TrackerRecorder:
         self._buffer: dict[TrackerRenderState, list] = {}
 
     def toggle_recording(self, render_states: list[TrackerRenderState]) -> None:
-    def toggle_recording(self, render_states: list[TrackerRenderState]) -> None:
-        """Start recording if idle, otherwise stop the current recording"""
+        """Start recording id idle, otherwise stop the current recording"""
         if self.is_recording:
             self.stop_recording()
         else:
-            self.start_recording(render_states)        """Begin a new recording session and create an empty buffer for each tracker.
+            self.start_recording(render_states)
+
+    def start_recording( self, render_states: list[TrackerRenderState]) -> None:
+        """Begin a new recording session and create an empty buffer for each tracker.
         
             Parameters:
             render_states: list[TrackerRenderState]
@@ -93,9 +95,6 @@ class TrackerRecorder:
             tracker_name = rs.data.get("name", f"Tracker_{idx}").replace(" ", "_")
 
             # Convert recorded samples to numpy arrays
-            tracker_name = f"{rs.data.get('name', 'Tracker')}_{idx}".replace(" ", "_")
-
-            # Convert recorded samples to numpy arrays
             timestamps = np.array([f["time"] for f in frames], dtype = np.float64)
             positions = np.array([f["pos"] for f in frames], dtype = np.float32)
             rotations = np.array([f["rot"] for f in frames], dtype = np.float32)
@@ -103,7 +102,11 @@ class TrackerRecorder:
             # Store tracker data using descriptive keys
             save_dict[f"{tracker_name}_timestamps"] = timestamps
             save_dict[f"{tracker_name}_position"] = positions
-            save_dict[f"{tracker_name}_rotation"] = rotations            np.savez_compressed(filename, **save_dict)
+            save_dict[f"{tracker_name}_rotation"] = rotations
+
+        if has_valid_data:
+            filename = os.path.join(self.output_dir, f"recording_{int(time.time())}.npz")
+            np.savez_compressed(filename, **save_dict)
             print(f"Gesture exported to: {filename}")
         else:
             print("Recording canceled. There weren't valid frames to export")
