@@ -25,119 +25,7 @@ from ..tracker import BaseTracker
 from ..utils import CoordinateMapper
 from .tracker_renderer import TrackerRenderer, OrientationMode, TrackerRenderState
 from ..recordings import TrackerRecorder
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  PLANE DEFINITIONS
-# ──────────────────────────────────────────────────────────────────────────────
-# For each entry: plane_id, title, horiz_pos_label, horiz_neg_label, vert_pos_label, vert_neg_label
-PLANE_DEFS: list[tuple[Plane, str, str, str, str, str]] = [
-    ("XZ", "Top-Down View (XZ)", "X+", "X-", "Z-", "Z+"),
-    ("XY", "Front View (XY)", "X+", "X-", "Y+", "Y-" ),
-    ("ZY", "Side View (ZY)", "Z+", "Z-", "Y+", "Y-"),
-]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  STATIC SURFACE BUILDER
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _build_view_surface(
-    viewport_w: int,
-    viewport_h: int,
-    mapper: CoordinateMapper,
-    font_axis: pygame.font.Font,
-    font_title : pygame.font.Font,
-    plane_def: tuple[Plane, str, str, str, str, str],
-    grid_step_m: float = 0.05,
-) -> pygame.Surface:
-    """
-    Pre-render one view: fill, grid, axes, metric labels, title bar.
-    """
-
-    plane_id, title, h_pos, h_neg, v_pos, v_neg = plane_def
-
-    surf = pygame.Surface((viewport_w, viewport_h))
-    surf.fill(Theme.BG)
-    # canvas = pygame.Surface((viewport_w, viewport_h))
-    # canvas.fill(Theme.BG)
-
-    cx = viewport_w // 2
-    cy = viewport_h // 2
-
-    step_px_h, step_px_v = mapper.grid_spacing_pixels(grid_step_m)
-
-    # ── grid ───────────────────────────────────────────────────────────────
-    x = cx % step_px_h
-    while x <= viewport_w:
-        pygame.draw.line(surf, Theme.GRID, (int(x), 0), (int(x), viewport_h), 1)
-        x += step_px_h
-
-    y = cy % step_px_v
-    while y <= viewport_h:
-        pygame.draw.line(surf, Theme.GRID, (0, int(y)), (viewport_w, int(y)), 1)
-        y += step_px_v
-
-    # ── axes ───────────────────────────────────────────────────────────────
-    pygame.draw.line(surf, Theme.AXES, (0, cy), (viewport_w, cy), 2)   # Z axis
-    pygame.draw.line(surf, Theme.AXES, (cx, 0), (cx, viewport_h), 2)   # X axis
-
-    # ── metric tick labels ─────────────────────────────────────────────────
-    world_range_h = mapper.world_range_h
-    world_range_v = mapper.world_range_v
-
-    # X ticks (horizontal)
-    m = grid_step_m
-    while m <= world_range_h:
-        for sign in (-1, 1):
-            val = sign * m
-            px = cx + int(val * mapper.scale_h)
-            if 0 <= px <= viewport_w:
-                pygame.draw.line(surf, Theme.AXES, (px, cy - 5), (px, cy + 5), 1)
-                label = f"{abs(val) * 100:.0f} cm" if abs(val) >= 0.01 else "0 cm"
-                lbl = font_axis.render(label, True, Theme.TEXT_DIM)
-                surf.blit(lbl, (px - lbl.get_width() // 2, cy + 8))
-        m += grid_step_m
-
-    # Z ticks (vertical)
-    max_v_m = (viewport_h / 2) / mapper.scale_v
-    m = grid_step_m
-    while m <= world_range_v:
-        for sign in (-1, 1):
-            val = sign * m
-            py = cy + int(val * mapper.scale_v)
-            if 0 <= py <= viewport_h:
-                pygame.draw.line(surf, Theme.AXES, (cx - 5, py), (cx + 5, py), 1)
-                label = f"{abs(val) * 100:.0f} cm" if abs(val) >= 0.01 else "0 cm"
-                lbl = font_axis.render(label, True, Theme.TEXT_DIM)
-                surf.blit(lbl, (cx + 8, py - lbl.get_height() // 2))
-        m += grid_step_m
-
-    # ── axis direction labels ──────────────────────────────────────────────
-    margin = 10
-    for text, pos in [
-        (h_pos, (viewport_w - margin - font_axis.size(h_pos)[0], cy + 6)),
-        (h_neg, (margin, cy + 6)),
-        (v_pos, (cx + 6, margin + _TITLE_BAR_H + 4)),
-        (v_neg, (cx + 6, viewport_h - margin - font_axis.get_height())),
-    ]:
-        lbl = font_axis.render(text, True, Theme.AXES)
-        surf.blit(lbl, pos)
-
-    # ── title bar ───────────────────────────────────────────────────────────
-    title_bar = pygame.Rect(0, 0, viewport_w, _TITLE_BAR_H)
-    pygame.draw.rect(surf, Theme.VIEW_TITLE_BG, title_bar)
-    pygame.draw.line(surf, Theme.VIEW_BORDER, (0, _TITLE_BAR_H -1), (viewport_w, _TITLE_BAR_H -1), 1)
-
-    t_surf = font_title.render(title, True, Theme.TEXT)
-    surf.blit(t_surf, ((viewport_w - t_surf.get_width()) // 2, (_TITLE_BAR_H - t_surf.get_height()) // 2))
-
-    # ── outer border ───────────────────────────────────────────────────────────
-    pygame.draw.rect(surf, Theme.VIEW_BORDER, pygame.Rect(0, 0, viewport_w, viewport_h), 1)
-
-    return surf.convert()
-
-_TITLE_BAR_H = 32 # px reserved for the plane title
+from .view_utils import (PLANE_DEFS, TITLE_BAR_H, build_view_surface, build_plane_views, render_trackers_on_views, toggle_orientation)
 
 
 def _build_panel_surface(
@@ -238,35 +126,15 @@ class PygameViewer:
         screen.fill((210, 214, 220))
 
         # 1. Each view
-        for plane_id, plane_def in zip(
-            [p[0] for p in PLANE_DEFS], PLANE_DEFS
-        ):
-            rect = self._view_rects[plane_id]
-            screen.blit(self._view_surfs[plane_id], rect.topleft)
-
-            for rs in self._render_states:
-                if rs.data.get("tracking"):
-                    mapper = self._mappers[plane_id]
-
-                    if self.show_trail:
-                        TrackerRenderer.draw_trail(
-                            screen=self._screen,
-                            history=rs.history,
-                            color=rs.color,
-                            mapper=mapper,
-                            clip_rect=rect,
-                            title_bar_height=_TITLE_BAR_H,
-                        )
-
-                    TrackerRenderer.draw(
-                        screen=self._screen,
-                        tracker_data=rs.data,
-                        color=rs.color,
-                        mapper=mapper,
-                        clip_rect=rect,
-                        title_bar_height=_TITLE_BAR_H,
-                        orientation_mode=self.orientation_mode,
-                    )
+        render_trackers_on_views(
+            screen=self._screen,
+            tracker_states=self._render_states,
+            view_rects=self._view_rects,
+            view_surfs=self._view_surfs,
+            mappers=self._mappers,
+            show_trail=self.show_trail,
+            orientation_mode=self.orientation_mode,
+        )
 
         # 2. Panel background 
         screen.blit(self._panel_surf, self._panel_rect.topleft)
@@ -278,7 +146,7 @@ class PygameViewer:
         first_rect = self._view_rects[PLANE_DEFS[0][0]]
         fps = self._clock.get_fps()
         fps_surf = self._font_fps.render(f"FPS {fps:.0f}", True, Theme.TEXT_DIM)
-        screen.blit(fps_surf, (first_rect.x + 8, first_rect.y + _TITLE_BAR_H + 4))
+        screen.blit(fps_surf, (first_rect.x + 8, first_rect.y + TITLE_BAR_H + 4))
 
         pygame.display.flip()
 
@@ -333,34 +201,17 @@ class PygameViewer:
             )
 
     def _rebuild_static_surfaces(self) -> None:
-        for plane_def in PLANE_DEFS:
-            plane_id = plane_def[0]
-            rect = self._view_rects[plane_id]
-
-            mapper = CoordinateMapper(
-                viewport_x = rect.x,
-                viewport_y = rect.y,
-                viewport_w = rect.w,
-                viewport_h = rect.h,
-                world_range_h = self.WORLD_RANGE,
-                world_range_v = self.WORLD_RANGE,
-                plane = plane_id,
-            )
-            self._mappers[plane_id] = mapper
-
-            self._view_surfs[plane_id] = _build_view_surface(
-                rect.w, rect.h,
-                mapper,
-                self._font_axis,
-                self._font_title,
-                plane_def,
-                grid_step_m = 0.05
-            )
+        self._mappers, self._view_surfs = build_plane_views(
+            view_rects=self._view_rects,
+            world_range=self.WORLD_RANGE,
+            font_axis=self._font_axis,
+            font_title=self._font_title,
+        )
 
         self._panel_surf = _build_panel_surface(
             self._panel_rect.w,
             self._panel_rect.h,
-            self._font_title
+            self._font_title,
         )
 
     # ── private: event handling ──────────────────────────────────────────────
@@ -381,10 +232,9 @@ class PygameViewer:
                     for rs in self._render_states:
                         rs.source.reset_origin()
                 if event.key == pygame.K_o:
-                    if self.orientation_mode == OrientationMode.QUATERNION:
-                        self.orientation_mode = OrientationMode.EULER
-                    else:
-                        self.orientation_mode = OrientationMode.QUATERNION
+                    self.orientation_mode = toggle_orientation(
+                        self.orientation_mode
+                    )
                     print(f"Orientation Mode: " 
                             f"{self.orientation_mode.name}")
                 if event.key == pygame.K_r:
