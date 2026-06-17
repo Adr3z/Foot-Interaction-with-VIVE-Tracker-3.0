@@ -1,0 +1,494 @@
+"""
+recording_viewer.py
+-------------------
+
+Displays a recording file as three projected planes without the side info panel.
+The viewer loads a .npz recording, plays it with original timing, and supports
+pause/play, seek, restart, and file reload controls.
+"""
+
+from __future__ import annotations
+
+import os
+import pygame
+from collections import deque
+from typing import Any
+
+from .theme import Theme
+from .tracker_renderer import TrackerRenderer, OrientationMode
+from ..utils import CoordinateMapper
+from ..recordings import FileManager, PlaybackEngine
+from .view_utils import (PLANE_DEFS, TITLE_BAR_H, build_view_surface, build_plane_views, render_trackers_on_views, toggle_orientation)
+
+Plane = str
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  RECORDING TRACK STATE
+# ──────────────────────────────────────────────────────────────────────────────
+class RecordingTrackState:
+    """Stores the current playback frame data and trail history for a recorded tracker"""
+    def __init__(self, name: str, color: tuple[int, int, int], history_length: int = 80):
+        self.name = name
+        self.color = color
+
+        # Recent world-space positions used for trail rendering
+        self.history: deque[dict[str, float]] = deque(maxlen=history_length)
+        # Current frame data
+        self.data: dict[str, Any] = {}
+
+    def update(self, tracker_data: dict[str, Any]) -> None:
+        """ Updata tracker state from the current playback frame"""
+        self.data = tracker_data
+        # Append position to the trail only while tracking is valid
+        if tracker_data.get("tracking"):
+            self.history.append({
+                "x": tracker_data.get("x", 0.0),
+                "y": tracker_data.get("y", 0.0),
+                "z": tracker_data.get("z", 0.0),
+            })
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  MAIN VIEWER CLASS
+# ──────────────────────────────────────────────────────────────────────────────
+class RecordingViewer:
+    """ Playback viewer for recorded tracker sessions """
+    TARGET_FPS = 90
+    WORLD_RANGE = 0.250
+    TRAIL_LENGTH = 120
+    SEEK_STEP = 0.5
+    CONTROL_BUTTON_HEIGHT = 48
+    SIDE_PANEL_WIDTH = 210
+    CONTROL_BAR_HEIGHT = 80
+
+    def __init__(
+        self,
+        recording_path: str | None = None,
+        window_size: tuple[int, int] = (1400, 720),
+        loop: bool = False,
+    ):
+        # Window and application state
+        self._window_size = window_size
+        self._running = False
+
+        # Pygame objects
+        self._screen: pygame.Surface | None = None
+        self._clock: pygame.time.Clock | None = None
+
+        # Per-view rendering resources
+        self._mappers: dict[Plane, CoordinateMapper] = {}
+        self._view_surfs: dict[Plane, pygame.Surface] = {}
+        self._view_rects: dict[Plane, pygame.Rect] = {}
+
+        # Side panel and control bar layout
+        self._panel_rect: pygame.Rect | None = None
+        self._controls_rect: pygame.Rect | None = None
+
+        # Clickable control buttons
+        self._control_buttons: dict[str, pygame.Rect] = {}
+
+        # Playback control labels and associated actions
+        self._control_labels: list[tuple[str, str]] = [
+            ("Play/Pause", "toggle"),
+            ("<< 0.5s", "rewind"),
+            ("0.5s >>", "forward"),
+            ("Restart", "reset"),
+            ("End", "end"),
+            ("Toggle Trail", "trail"),
+            ("Orientation", "orient"),
+            ("Load File", "load"),
+
+        ]
+
+        self._font_title: pygame.font.Font | None = None
+        self._font_body: pygame.font.Font | None = None
+        self._font_axis: pygame.font.Font | None = None
+        self._font_overlay: pygame.font.Font | None = None
+        self._orientation_mode = OrientationMode.QUATERNION
+        self._show_trail = True
+        self._recording_path = recording_path
+        self._recording_data: dict[str, dict[str, Any]] = {}
+        self._playback: PlaybackEngine | None = None
+        self._track_states: list[RecordingTrackState] = []
+        self._loop = loop
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    def run(self) -> None:
+        """ Start playback viewer main loop"""
+        if not self._load_recording():
+            return
+
+        self._init_pygame()
+        self._running = True
+
+        try:
+            while self._running:
+                # Process input, update playback state and render frame
+                self._handle_events()
+                self.update()
+                self.render()
+                self._clock.tick(self.TARGET_FPS)
+        finally:
+            pygame.quit()
+
+    def update(self) -> None:
+        """ Advance playback and update tracker render states """
+        delta_seconds = self._clock.get_time() / 1000.0
+        if self._playback is not None:
+            self._playback.update(delta_seconds)
+            current_data = self._playback.get_current_frame_data()
+            for state in self._track_states:
+                state.update(current_data.get(state.name, {
+                    "name": state.name,
+                    "tracking": False,
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": 0.0,
+                    "qx": 0.0,
+                    "qy": 0.0,
+                    "qz": 0.0,
+                    "qw": 1.0,
+                }))
+
+    def render(self) -> None:
+        """ Render the complete playback viewer frame """
+        self._screen.fill(Theme.BG)
+
+        # Draw tracker projections on all plane views
+        render_trackers_on_views(
+            screen=self._screen,
+            tracker_states=self._track_states,
+            view_rects=self._view_rects,
+            view_surfs=self._view_surfs,
+            mappers=self._mappers,
+            show_trail=self._show_trail,
+            orientation_mode=self._orientation_mode,
+        )
+
+        # Draw information panel
+        if self._panel_rect is not None:
+            pygame.draw.rect(self._screen, Theme.PANEL_BG, self._panel_rect)
+            pygame.draw.rect(self._screen, Theme.PANEL_BORDER, self._panel_rect, 1)
+            self._draw_panel(self._panel_rect)
+
+        # Draw control bar
+        if self._controls_rect is not None:
+            pygame.draw.rect(self._screen, Theme.PANEL_BG, self._controls_rect)
+            pygame.draw.rect(self._screen, Theme.PANEL_BORDER, self._controls_rect, 1)
+            self._draw_control_bar(self._controls_rect)
+        pygame.display.flip()
+
+
+    # ── recording management ─────────────────────────────────────────────────
+    def _load_recording(self) -> bool:
+        """ Load a recording file and initialize playback state """
+        path = self._recording_path
+        if not path:
+            path = FileManager.select_recording_path()
+
+        if not path or not os.path.exists(path):
+            print("No se seleccionó ninguna grabación.")
+            return False
+
+        try:
+            self._recording_data = FileManager.load_recording_data(path)
+        except Exception as exc:
+            print(f"Error al cargar la grabación: {exc}")
+            return False
+
+        self._recording_path = path
+        self._playback = PlaybackEngine(self._recording_data, loop=self._loop)
+        self._track_states = []
+
+        # Create render states for every recorded tracker
+        for name in self._recording_data.keys():
+            color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
+            self._track_states.append(
+                RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+            )
+
+        return True
+
+
+    def _reload_recording(self) -> None:
+        """ Reload the current recording from disk """
+        if self._load_recording():
+            self._track_states = []
+            for name in self._recording_data.keys():
+                color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
+                self._track_states.append(
+                    RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+                )
+
+
+    def _change_recording(self) -> None:
+        """ Load a different recording selected by the user """
+        path = FileManager.select_recording_path()
+        if not path or not os.path.exists(path):
+            print("Selection canceled")
+            return
+
+        try:
+            new_data = FileManager.load_recording_data(path)
+        except Exception as exc:
+            print(f"Error in loading new file: {exc}")
+            return
+
+        self._recording_path = path
+        self._recording_data = new_data
+        self._playback = PlaybackEngine(self._recording_data, loop=self._loop)
+        self._track_states = []
+
+        for name in self._recording_data.keys():
+            color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
+            self._track_states.append(
+                RecordingTrackState(name, color, history_length=self.TRAIL_LENGTH)
+            )
+
+    # ── initialization ───────────────────────────────────────────────────────
+    def _init_pygame(self) -> None:
+        pygame.init()
+        self._screen = pygame.display.set_mode(self._window_size, pygame.RESIZABLE)
+        pygame.display.set_caption("Recording Playback Viewer")
+        self._clock = pygame.time.Clock()
+        self._init_fonts()
+        self._compute_layout(*self._window_size)
+        self._rebuild_static_surfaces()
+
+    def _init_fonts(self) -> None:
+        fam = Theme.FONT_FAMILY
+        self._font_title = pygame.font.SysFont(fam, 24)
+        self._font_body = pygame.font.SysFont(fam, 18)
+        self._font_axis = pygame.font.SysFont(fam, 14)
+        self._font_overlay = pygame.font.SysFont(fam, 18)
+
+    def _compute_layout(self, win_w: int, win_h: int) -> None:
+        """ Recompute view, panel and control bar layout """
+        GAP = 12
+
+        # Available are excluding bottom control bar
+        content_h = win_h - self.CONTROL_BAR_HEIGHT - GAP *3
+
+        # Divide available width among the three projection views
+        views_w = win_w - self.SIDE_PANEL_WIDTH - GAP * 4
+        view_w = views_w // 3
+        view_h = content_h
+        x = GAP
+
+        # Create projection view rectangles
+        for plane_id, *_ in PLANE_DEFS:
+            self._view_rects[plane_id] = pygame.Rect( x, GAP, view_w, view_h)
+            x += view_w + GAP
+
+        # Create side information panel
+        self._panel_rect = pygame.Rect(x, GAP, self.SIDE_PANEL_WIDTH, content_h)
+        # Create bottom control bar
+        self._controls_rect = pygame.Rect( GAP, win_h - self.CONTROL_BAR_HEIGHT - GAP, win_w - GAP * 2, self.CONTROL_BAR_HEIGHT)
+
+
+    def _rebuild_static_surfaces(self) -> None:
+        self._mappers, self._view_surfs = build_plane_views(
+            view_rects=self._view_rects,
+            world_range=self.WORLD_RANGE,
+            font_axis=self._font_axis,
+            font_title=self._font_title,
+        )
+
+
+    # ── event handling ───────────────────────────────────────────────────────
+    def _handle_events(self) -> None:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self._running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self._running = False
+                elif event.key == pygame.K_SPACE:
+                    self._toggle_playback()
+                elif event.key == pygame.K_LEFT:
+                    self._seek(-self.SEEK_STEP)
+                elif event.key == pygame.K_RIGHT:
+                    self._seek(self.SEEK_STEP)
+                elif event.key == pygame.K_HOME:
+                    self._reset_playback()
+                elif event.key == pygame.K_END:
+                    self._goto_end()
+                elif event.key == pygame.K_s:
+                    self._show_trail = not self._show_trail
+                elif event.key == pygame.K_o:
+                    self._orientation_mode = toggle_orientation(
+                        self._orientation_mode
+                    )
+                elif event.key == pygame.K_l:
+                    self._change_recording()
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._handle_mouse_click(event.pos)
+
+            elif event.type == pygame.VIDEORESIZE:
+                self._window_size = (event.w, event.h)
+                self._compute_layout(event.w, event.h)
+                self._rebuild_static_surfaces()
+
+
+    def _handle_mouse_click(self, pos: tuple[int, int]) -> None:
+        for action, rect in self._control_buttons.items():
+            if rect.collidepoint(pos):
+                if action == "toggle":
+                    self._toggle_playback()
+                elif action == "rewind":
+                    self._seek(-self.SEEK_STEP)
+                elif action == "forward":
+                    self._seek(self.SEEK_STEP)
+                elif action == "reset":
+                    self._reload_recording()
+                elif action == "end":
+                    self._goto_end()
+                elif action == "load":
+                    self._change_recording()
+                elif action == "trail":
+                    self._show_trail = not self._show_trail
+                elif action == "orient":
+                    self._orientation_mode = toggle_orientation(
+                        self._orientation_mode
+                    )
+                break
+
+
+    # ── drawing helpers ──────────────────────────────────────────────────────
+    def _draw_panel(self, panel_rect: pygame.Rect) -> None:
+        """ Draw playback information and keyboard shortcuts """
+        if self._playback is None:
+            return
+
+        status = "Playing" if self._playback.is_playing else "Paused"
+        current = self._playback.current_time
+        duration = self._playback.duration
+        file_name = os.path.basename(self._recording_path or "")
+
+        left_x = panel_rect.x + 16
+        top_y = panel_rect.y + 16
+        line_height = self._font_overlay.get_height() + 8
+
+        lines = [
+            "Playback Information", 
+            "",
+            f"File: {file_name}",
+            f"Status: {status}",
+            f"Time: {current:.2f}s / {duration:.2f}s",
+            f"Trail: {'On' if self._show_trail else 'Off'}",
+            f"Orientation: {self._orientation_mode.name}",
+            "",
+            "Keyboard Controls:",
+            "SPACE - Play / Pause",
+            "LEFT - Rewind 0.5s",
+            "RIGHT - Forward 0.5s", 
+            "HOME - Restart",
+            "END - Go to End",
+            "S - Toggle Trail",
+            "O - Toggle Orientation",
+            "L - Load Recording",
+            "Esc - Exit"
+        ]
+
+        for i, line in enumerate(lines):
+            color = Theme.TEXT
+
+            if line in ("Playback Information", "Keyboard Controls"):
+                color = Theme.ACCENT if hasattr(Theme, "ACCENT") else Theme.TEXT
+
+            surf = self._font_overlay.render(line, True, color)
+            self._screen.blit(
+                surf,
+                (
+                    left_x,
+                    top_y + i * line_height,
+                ),
+            )
+
+
+    def _draw_control_buttons(self, panel_rect: pygame.Rect) -> None:
+        button_count = len(self._control_labels)
+        spacing = 12
+        total_spacing = spacing * (button_count - 1)
+        available_width = panel_rect.w - 32 - total_spacing
+
+        button_width = max(110, min(160, available_width // button_count))
+        button_height = self.CONTROL_BUTTON_HEIGHT
+
+        total_buttons_width = (button_width * button_count) + total_spacing
+        x = panel_rect.x + (panel_rect.w - total_buttons_width) // 2
+        y = panel_rect.y + panel_rect.h - button_height - 14
+        self._control_buttons.clear()
+
+        for label, key in self._control_labels:
+            button_rect = pygame.Rect(x, y, button_width, button_height)
+            pygame.draw.rect(self._screen, Theme.CARD_BG, button_rect, border_radius=8)
+            pygame.draw.rect(self._screen, Theme.VIEW_BORDER, button_rect, 1, border_radius=8)
+            text_surf = self._font_body.render(label, True, Theme.TEXT)
+            self._screen.blit(
+                text_surf,
+                (
+                    button_rect.x + (button_width - text_surf.get_width()) // 2,
+                    button_rect.y + (button_height - text_surf.get_height()) // 2,
+                ),
+            )
+            self._control_buttons[key] = button_rect
+            x += button_width + spacing
+
+    def _draw_control_bar(self, bar_rect: pygame.Rect) -> None:
+        """ Draw bottom playback control buttons """
+        button_count = len(self._control_labels)
+
+        spacing = 12
+        margin = 16
+        total_spacing = spacing * (button_count -1)
+        available_width = bar_rect.w - margin *2 - total_spacing
+
+        button_width = max( 110, min(160, available_width // button_count))
+        button_height = self.CONTROL_BUTTON_HEIGHT
+        total_width = ( button_width * button_count+ total_spacing)
+
+        x = bar_rect.x + (bar_rect.w - total_width) // 2
+        y = bar_rect.y + (bar_rect.h - button_height) // 2
+        self._control_buttons.clear()
+
+        for label, key in self._control_labels:
+            rect = pygame.Rect(x, y, button_width, button_height)
+            pygame.draw.rect( self._screen, Theme.CARD_BG, rect, border_radius=8)
+            pygame.draw.rect(self._screen, Theme.VIEW_BORDER, rect, 1, border_radius=8)
+            text = self._font_body.render( label, True, Theme.TEXT)
+            self._screen.blit(text, (rect.x + (rect.w - text.get_width()) // 2, rect.y + (rect.h - text.get_height()) // 2,), )
+
+            self._control_buttons[key] = rect
+
+            x += button_width + spacing
+
+    # ── playback controls ────────────────────────────────────────────────────
+    def _toggle_playback(self) -> None:
+        if self._playback is None:
+            return
+        if self._playback.is_playing:
+            self._playback.pause()
+        else:
+            self._playback.play()
+
+    def _seek(self, seconds: float) -> None:
+        if self._playback is None:
+            return
+        self._playback.seek(seconds)
+
+    def _reset_playback(self) -> None:
+        if self._playback is None:
+            return
+        self._playback.stop()
+
+    def _goto_end(self) -> None:
+        if self._playback is None:
+            return
+        self._playback.set_time(self._playback.duration)
+
+
+    # ── shutdown ─────────────────────────────────────────────────────────────
+    def _shutdown(self) -> None:
+        pygame.quit()
