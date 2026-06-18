@@ -41,7 +41,7 @@ def main() -> None:
         viewer.run()
 
     elif mode == "recording":
-        viewer = RecordingViewer(window_size=(2100, 700), loop=False)
+        viewer = RecordingViewer(window_size=(1800, 550), loop=False)
         viewer.run()
 
     else:
