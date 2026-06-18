@@ -10,6 +10,7 @@ pause/play, seek, restart, and file reload controls.
 from __future__ import annotations
 
 import os
+
 import numpy as np
 import pygame
 from collections import deque
@@ -19,6 +20,7 @@ from .theme import Theme
 from .tracker_renderer import TrackerRenderer, OrientationMode
 from ..utils import CoordinateMapper
 from ..recordings import FileManager, PlaybackEngine
+from ..gesture_processing import PCAGestureProcessor
 from .view_utils import (PLANE_DEFS, TITLE_BAR_H, build_view_surface, build_plane_views, render_trackers_on_views, toggle_orientation)
 
 Plane = str
@@ -60,10 +62,11 @@ class RecordingViewer:
     WORLD_RANGE = 0.250
     TRAIL_LENGTH = 120
     SEEK_STEP = 0.5
-    CONTROL_BUTTON_HEIGHT = 48
-    SIDE_PANEL_WIDTH = 210
-    PROGRESS_BAR_HEIGHT = 40
-    CONTROL_BAR_HEIGHT = 80
+    CONTROL_BUTTON_HEIGHT = 36
+    SIDE_PANEL_WIDTH = 220
+    PCA_PANEL_WIDTH = 360
+    PROGRESS_BAR_HEIGHT = 32
+    CONTROL_BAR_HEIGHT = 64
 
     def __init__(
         self,
@@ -85,12 +88,16 @@ class RecordingViewer:
         self._view_rects: dict[Plane, pygame.Rect] = {}
 
         # Side panel and control bar layout
+        self._pca_rect: pygame.Rect | None = None
         self._panel_rect: pygame.Rect | None = None
         self._progress_rect: pygame.Rect | None = None
         self._controls_rect: pygame.Rect | None = None
 
         # Clickable control buttons
         self._control_buttons: dict[str, pygame.Rect] = {}
+
+        # PCA preview surface
+        self._pca_surface: pygame.Surface | None = None
 
         # Playback control labels and associated actions
         self._control_labels: list[tuple[str, str]] = [
@@ -171,6 +178,11 @@ class RecordingViewer:
             orientation_mode=self._orientation_mode,
         )
 
+        # Draw PCA preview surface between last view and info panel
+        if self._pca_surface is not None and self._pca_rect is not None:
+            self._screen.blit(self._pca_surface, self._pca_rect.topleft)
+            pygame.draw.rect(self._screen, Theme.VIEW_BORDER, self._pca_rect, 1)
+
         # Draw information panel
         if self._panel_rect is not None:
             pygame.draw.rect(self._screen, Theme.PANEL_BG, self._panel_rect)
@@ -199,13 +211,13 @@ class RecordingViewer:
             path = FileManager.select_recording_path()
 
         if not path or not os.path.exists(path):
-            print("No se seleccionó ninguna grabación.")
+            print("No record selected")
             return False
 
         try:
             self._recording_data = FileManager.load_recording_data(path)
         except Exception as exc:
-            print(f"Error al cargar la grabación: {exc}")
+            print(f"Error to load recording: {exc}")
             return False
 
         self._recording_path = path
@@ -219,6 +231,8 @@ class RecordingViewer:
                 RecordingTrackState(name, color, history_length=None)
             )
 
+        self._load_pca_surface()
+
         return True
 
 
@@ -231,6 +245,7 @@ class RecordingViewer:
                 self._track_states.append(
                     RecordingTrackState(name, color, history_length=None)
                 )
+            self._load_pca_surface()
 
 
     def _change_recording(self) -> None:
@@ -257,6 +272,8 @@ class RecordingViewer:
                 RecordingTrackState(name, color, history_length=None)
             )
 
+        self._load_pca_surface()
+
     # ── initialization ───────────────────────────────────────────────────────
     def _init_pygame(self) -> None:
         pygame.init()
@@ -271,7 +288,7 @@ class RecordingViewer:
         fam = Theme.FONT_FAMILY
         self._font_title = pygame.font.SysFont(fam, 24)
         self._font_body = pygame.font.SysFont(fam, 18)
-        self._font_axis = pygame.font.SysFont(fam, 14)
+        self._font_axis = pygame.font.SysFont(fam, 16)
         self._font_overlay = pygame.font.SysFont(fam, 18)
 
     def _compute_layout(self, win_w: int, win_h: int) -> None:
@@ -281,16 +298,20 @@ class RecordingViewer:
         # Available area excluding progress and bottom control bar
         content_h = win_h - self.CONTROL_BAR_HEIGHT - self.PROGRESS_BAR_HEIGHT - GAP *4
 
-        # Divide available width among the three projection views
-        views_w = win_w - self.SIDE_PANEL_WIDTH - GAP * 4
-        view_w = views_w // 3
+        # Divide available width among the three projection views plus PCA and panel columns
+        views_w = win_w - self.SIDE_PANEL_WIDTH - self.PCA_PANEL_WIDTH - GAP * 5
+        view_w = max(180, views_w // 3)
         view_h = content_h
         x = GAP
 
         # Create projection view rectangles
         for plane_id, *_ in PLANE_DEFS:
-            self._view_rects[plane_id] = pygame.Rect( x, GAP, view_w, view_h)
+            self._view_rects[plane_id] = pygame.Rect(x, GAP, view_w, view_h)
             x += view_w + GAP
+
+        # Create PCA preview panel
+        self._pca_rect = pygame.Rect(x, GAP, self.PCA_PANEL_WIDTH, content_h)
+        x += self.PCA_PANEL_WIDTH + GAP
 
         # Create side information panel
         self._panel_rect = pygame.Rect(x, GAP, self.SIDE_PANEL_WIDTH, content_h)
@@ -307,6 +328,37 @@ class RecordingViewer:
             font_axis=self._font_axis,
             font_title=self._font_title,
         )
+        self._load_pca_surface()
+
+    def _load_pca_surface(self) -> None:
+        """Generate or refresh the PCA comparison surface for the current recording."""
+        self._pca_surface = None
+        if self._recording_path is None or self._pca_rect is None:
+            return
+
+        try:
+            surface = PCAGestureProcessor.generate_comparison_surface(
+                self._recording_path,
+                width=self._pca_rect.w,
+                height=self._pca_rect.h,
+                bg_color_hex="#1E1E24",
+                text_color_hex="#E0E0E6",
+            )
+            if surface is None:
+                return
+
+            surface = surface.convert()
+            if surface.get_size() != (self._pca_rect.w, self._pca_rect.h):
+                bg = pygame.Surface((self._pca_rect.w, self._pca_rect.h))
+                bg.fill(Theme.BG)
+                bg.blit(surface, ((bg.get_width() - surface.get_width()) // 2,
+                                   (bg.get_height() - surface.get_height()) // 2))
+                self._pca_surface = bg.convert()
+            else:
+                self._pca_surface = surface
+        except Exception as exc:
+            print(f"Error generating PCA preview: {exc}")
+            self._pca_surface = None
 
 
     # ── event handling ───────────────────────────────────────────────────────
@@ -427,47 +479,18 @@ class RecordingViewer:
             )
 
 
-    def _draw_control_buttons(self, panel_rect: pygame.Rect) -> None:
-        button_count = len(self._control_labels)
-        spacing = 12
-        total_spacing = spacing * (button_count - 1)
-        available_width = panel_rect.w - 32 - total_spacing
-
-        button_width = max(110, min(160, available_width // button_count))
-        button_height = self.CONTROL_BUTTON_HEIGHT
-
-        total_buttons_width = (button_width * button_count) + total_spacing
-        x = panel_rect.x + (panel_rect.w - total_buttons_width) // 2
-        y = panel_rect.y + panel_rect.h - button_height - 14
-        self._control_buttons.clear()
-
-        for label, key in self._control_labels:
-            button_rect = pygame.Rect(x, y, button_width, button_height)
-            pygame.draw.rect(self._screen, Theme.CARD_BG, button_rect, border_radius=8)
-            pygame.draw.rect(self._screen, Theme.VIEW_BORDER, button_rect, 1, border_radius=8)
-            text_surf = self._font_body.render(label, True, Theme.TEXT)
-            self._screen.blit(
-                text_surf,
-                (
-                    button_rect.x + (button_width - text_surf.get_width()) // 2,
-                    button_rect.y + (button_height - text_surf.get_height()) // 2,
-                ),
-            )
-            self._control_buttons[key] = button_rect
-            x += button_width + spacing
-
     def _draw_control_bar(self, bar_rect: pygame.Rect) -> None:
         """ Draw bottom playback control buttons """
         button_count = len(self._control_labels)
 
-        spacing = 12
-        margin = 16
+        spacing = 10
+        margin = 14
         total_spacing = spacing * (button_count -1)
         available_width = bar_rect.w - margin *2 - total_spacing
 
-        button_width = max( 110, min(160, available_width // button_count))
+        button_width = max(90, min(130, available_width // button_count))
         button_height = self.CONTROL_BUTTON_HEIGHT
-        total_width = ( button_width * button_count+ total_spacing)
+        total_width = (button_width * button_count + total_spacing)
 
         x = bar_rect.x + (bar_rect.w - total_width) // 2
         y = bar_rect.y + (bar_rect.h - button_height) // 2
