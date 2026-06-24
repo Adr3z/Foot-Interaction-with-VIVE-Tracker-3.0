@@ -3,6 +3,9 @@ pca_projection.py
 -----------------
 
 Runs PCA on a recording to identify the principal plane and generate a static 2D image.
+
+    - get_2d_coords: returns raw 2d projected coordinates
+    - generate_comparision_surface: rendering onlym calls get_2d_coords internally
 """
 
 import io
@@ -17,6 +20,29 @@ import pygame
 from ..recordings import FileManager
 
 class PCAGestureProcessor:
+
+    @staticmethod
+    def get_2d_coords(file_path: str) -> np.ndarray | None:
+        """ Loads a recording and returns the raw 2d PCA projection as a numpy array"""
+        recording_data = FileManager.load_recording_data(file_path)
+        if not recording_data:
+            print("Error: invalid data.")
+            return None
+
+        tracker_name = list(recording_data.keys())[0]
+        positions = recording_data[tracker_name]["pos"]
+
+        if len(positions) < 3:
+            print("Error: insufficient data to run PCA")
+            return None
+
+        #  DIRECT PCA 
+        pca = PCA(n_components=2)
+        coords_2d = pca.fit_transform(positions)
+
+        return coords_2d
+
+
     @staticmethod
     def generate_comparison_surface(
         file_path: str, 
@@ -26,67 +52,66 @@ class PCAGestureProcessor:
         text_color_hex: str = "#E0E0E6"
     ) -> pygame.Surface | None:
         """
-        Loads a recording, executes the two PCA approaches, and returns a Pygame surface ready to be drawn (blit) to the screen.
+        Loads a recording, runs PCA, and returns a Pygame surface ready to blit.
         """
-        # load file
-        recording_data = FileManager.load_recording_data(file_path)
-        if not recording_data:
-            print("Error: Invalid data.")
+        coords_2d = PCAGestureProcessor.get_2d_coords(file_path)
+        if coords_2d is None:
             return None
-
-        # get the first tracker on file
-        tracker_name = list(recording_data.keys())[0]
-        positions = recording_data[tracker_name]["pos"]
-
-        if len(positions) < 3:
-            print("Error: insuficient data to run PCA.")
-            return None
-
-        # =========================================================================
-        #  DIRECT PCA 
-        # =========================================================================
-        pca_direct = PCA(n_components=2)
-        coords_2d = pca_direct.fit_transform(positions)
-
-        # =========================================================================
-        # MATPLOT RENDER
-        # =========================================================================
-        # Adjust dimensions for pygame 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(width / 100, height / 100), dpi=100)
-        fig.patch.set_facecolor(bg_color_hex)
 
         # temporal index to show the time progression
-        time_index = np.arange(len(positions))
+        time_index = np.arange(len(coords_2d))
 
-        fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
+        return PCAGestureProcessor._render_to_surface(
+            coords_2d = coords_2d,
+            time_index=time_index,
+            width=width,
+            height=height,
+            bg_color_hex=bg_color_hex,
+            text_color_hex=text_color_hex,
+            title="PCA Projection"
+        )
+
+
+    @staticmethod
+    def _render_to_surface(
+        coords_2d: np.ndarray,
+        time_index: np.ndarray,
+        width: int,
+        height: int,
+        bg_color_hex: str,
+        text_color_hex: str,
+        title: str
+    ) -> pygame.Surface:
+        """ Renders a 2d coordinate array to a pygame surface using matplotlib.
+        Shared by both raw and processed render data"""
+
+        fig = plt.figure(figsize=(width / 100, height / 100), dpi=100)
         fig.patch.set_facecolor(bg_color_hex)
 
+        header_height = 0.07
+
+        fig.patches.append(
+            plt.Rectangle( (0, 1 - header_height), 1, header_height, transform=fig.transFigure, color=text_color_hex, zorder=10,)
+        )
+
+        fig.text(0.5, 1 - header_height / 2, title, ha="center", va="center", fontsize=12, color="black", fontweight="bold", zorder=11,)
+
+        ax = fig.add_axes([0.02, 0.02, 0.96, 0.86])
         ax.set_facecolor(bg_color_hex)
-        
-        scatter = ax.scatter(coords_2d[:, 0], coords_2d[:, 1], c=time_index, cmap="viridis", s=8, zorder=3)
-        ax.plot(coords_2d[:, 0], coords_2d[:, 1], color=text_color_hex, alpha=0.4, linewidth=1, zorder=2)
+        ax.set_aspect("equal", adjustable="box")
+        ax.axis("off")
 
-        ax.axis('off')
-        
-        ax.set_title("PCA Projection", color=text_color_hex, fontsize=11, pad=10)
-        ax.tick_params(colors=text_color_hex, labelsize=8)
-        
-        for spine in ax.spines.values():
-            spine.set_color(text_color_hex)
-            spine.set_alpha(0.3)
+        ax.scatter( coords_2d[:, 0], coords_2d[:, 1], c=time_index, cmap="viridis", s=8, zorder=3,)
 
-        plt.tight_layout()
+        ax.plot( coords_2d[:, 0], coords_2d[:, 1], color=text_color_hex, alpha=0.4, linewidth=1, zorder=2,)
 
-        # =========================================================================
-        # MATPLOT TO PYGAME SURFACE CONVERSION
-        # =========================================================================
         canvas = fig.canvas
         canvas.draw()
         rgba_buffer = canvas.buffer_rgba()
         size = canvas.get_width_height()
 
         pygame_surface = pygame.image.frombuffer(rgba_buffer, size, "RGBA")
-        
+
         plt.close(fig)
 
         return pygame_surface
