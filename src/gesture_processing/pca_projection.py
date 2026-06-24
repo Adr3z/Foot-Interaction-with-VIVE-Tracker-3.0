@@ -23,7 +23,7 @@ class PCAGestureProcessor:
         width: int = 500, 
         height: int = 500, 
         bg_color_hex: str = "#1E1E24",
-        text_color_hex: str = "#E0E0E6"
+        text_color_hex: str = "#DCDFE6"
     ) -> pygame.Surface | None:
         """
         Loads a recording, executes the two PCA approaches, and returns a Pygame surface ready to be drawn (blit) to the screen.
@@ -47,35 +47,66 @@ class PCAGestureProcessor:
         # =========================================================================
         pca_direct = PCA(n_components=2)
         coords_2d = pca_direct.fit_transform(positions)
+        # temporal index to show the time progression
+        time_index = np.arange(len(positions))
 
         # =========================================================================
         # MATPLOT RENDER
         # =========================================================================
         # Adjust dimensions for pygame 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(width / 100, height / 100), dpi=100)
+        fig = plt.figure(figsize=(width / 100, height / 100), dpi=100)
         fig.patch.set_facecolor(bg_color_hex)
 
-        # temporal index to show the time progression
-        time_index = np.arange(len(positions))
+        # White header band
+        header_height = 0.07
 
-        fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
-        fig.patch.set_facecolor(bg_color_hex)
+        fig.patches.append(
+            plt.Rectangle(
+                (0, 1 - header_height),
+                1,
+                header_height,
+                transform=fig.transFigure,
+                color=text_color_hex,
+                zorder=10,
+            )
+        )
 
+        fig.text(
+            0.5,
+            1 - header_height / 2,
+            "PCA Projection",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="black",
+            fontweight="bold",
+            zorder=11,
+        )
+
+        # PCA plot area
+        ax = fig.add_axes([0.02, 0.02, 0.96, 0.86])
         ax.set_facecolor(bg_color_hex)
-        
-        scatter = ax.scatter(coords_2d[:, 0], coords_2d[:, 1], c=time_index, cmap="viridis", s=8, zorder=3)
-        ax.plot(coords_2d[:, 0], coords_2d[:, 1], color=text_color_hex, alpha=0.4, linewidth=1, zorder=2)
+        ax.set_aspect("equal", adjustable="box")
+        ax.axis("off")
 
-        ax.axis('off')
-        
-        ax.set_title("PCA Projection", color=text_color_hex, fontsize=11, pad=10)
-        ax.tick_params(colors=text_color_hex, labelsize=8)
-        
-        for spine in ax.spines.values():
-            spine.set_color(text_color_hex)
-            spine.set_alpha(0.3)
+        # Draw tracker path
+        ax.scatter(
+            coords_2d[:, 0],
+            coords_2d[:, 1],
+            c=time_index,
+            cmap="viridis",
+            s=8,
+            zorder=3,
+        )
 
-        plt.tight_layout()
+        ax.plot(
+            coords_2d[:, 0],
+            coords_2d[:, 1],
+            color=text_color_hex,
+            alpha=0.4,
+            linewidth=1,
+            zorder=2,
+        )
 
         # =========================================================================
         # MATPLOT TO PYGAME SURFACE CONVERSION
