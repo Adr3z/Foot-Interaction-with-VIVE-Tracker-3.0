@@ -49,7 +49,7 @@ class PCAGestureProcessor:
         width: int = 500, 
         height: int = 500, 
         bg_color_hex: str = "#1E1E24",
-        text_color_hex: str = "#E0E0E6"
+        text_color_hex: str = "#DCDFE6"
     ) -> pygame.Surface | None:
         """
         Loads a recording, runs PCA, and returns a Pygame surface ready to blit.
