@@ -13,7 +13,12 @@ def train_knn(*args, **kwargs):
     return train(*args, **kwargs)
 
 
-def train_svm(*args, **kwargs):
+def train_svm_validation(*args, **kwargs):
+    from .trainer_svm_validation import train
+    return train(*args, **kwargs)
+
+
+def train_svm_final(*args, **kwargs):
     from .trainer_svm import train
     return train(*args, **kwargs)
 
@@ -25,7 +30,7 @@ def run_ml_pipeline(
     verbose: bool = True,
     generate_preview: bool = True,
 ):
-    """Central entry point for ML dataset creation and optional preview generation."""
+    """Builds the base dataset from raw recordings."""
     build_dataset, _, _ = _load_pipeline()
     return build_dataset(
         raw_dir=raw_dir,
@@ -36,4 +41,21 @@ def run_ml_pipeline(
     )
 
 
-__all__ = ["run_ml_pipeline", "train_knn", "train_svm", "_load_pipeline", "_load_preview"]
+def run_augmented_pipeline(
+    input_path: str = "data/processed/dataset.npz",
+    output_path: str = "data/processed/dataset_augmented.npz",
+):
+    """Builds the augmented dataset from the base dataset."""
+    from .dataset_augmented import create_augmented_dataset
+    return create_augmented_dataset(input_path=input_path, output_path=output_path)
+
+
+__all__ = [
+    "run_ml_pipeline",
+    "run_augmented_pipeline",
+    "train_knn",
+    "train_svm_validation",
+    "train_svm_final",
+    "_load_pipeline",
+    "_load_preview",
+]
