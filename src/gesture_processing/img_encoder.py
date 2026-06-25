@@ -14,6 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from .preprocessor import GesturePreprocessor
+
 
 class GestureImageEncoder:
 
@@ -33,19 +35,7 @@ class GestureImageEncoder:
         Returns:
             np.ndarray of shape (size, size), dtype float32, values in [0, 1]
         """
-        image = np.zeros((size, size), dtype=np.float32)
-        n_frames = len(coords_2d)
-
-        for i, (x, y) in enumerate(coords_2d):
-            # map [-1, 1] to [0, size - 1]
-            col = int(np.clip((x + 1) / 2 * (size - 1), 0, size - 1))
-            # invert y so that positive y maps to the top of the image
-            row = int(np.clip((1 - (y + 1) / 2) * (size - 1), 0, size - 1))
-
-            intensity = (i + 1) / n_frames  # temporal progression: 0 → 1
-            image[row, col] = max(image[row, col], intensity)
-
-        return image
+        return GesturePreprocessor.encode_to_image(coords_2d, size=size)
 
     @staticmethod
     def to_pygame_surface(
