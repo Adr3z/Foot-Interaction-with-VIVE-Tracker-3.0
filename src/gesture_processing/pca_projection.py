@@ -88,13 +88,13 @@ class PCAGestureProcessor:
         fig = plt.figure(figsize=(width / 100, height / 100), dpi=100)
         fig.patch.set_facecolor(bg_color_hex)
 
-        header_height = 0.07
+        header_height = 0.09
 
         fig.patches.append(
             plt.Rectangle( (0, 1 - header_height), 1, header_height, transform=fig.transFigure, color=text_color_hex, zorder=10,)
         )
 
-        fig.text(0.5, 1 - header_height / 2, title, ha="center", va="center", fontsize=12, color="black", fontweight="bold", zorder=11,)
+        fig.text(0.5, 1 - header_height / 2, title, ha="center", va="center", fontsize=10, color="black", fontweight="bold", zorder=11,)
 
         ax = fig.add_axes([0.02, 0.02, 0.96, 0.86])
         ax.set_facecolor(bg_color_hex)
