@@ -17,13 +17,14 @@ Usage:
     python -m ml.pipeline --size 32 --raw_dir data/raw --out_dir data/processed
 """
 
-import argparse
 import os
 import numpy as np
 
 from src.gesture_processing.pca_projection import PCAGestureProcessor
 from src.gesture_processing.preprocessor import GesturePreprocessor
-from src.gesture_processing.img_encoder import GestureImageEncoder
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 CLASSES = [1, 2, 3]
@@ -49,17 +50,47 @@ def process_recording(file_path: str, size: int) -> np.ndarray | None:
     if coords_raw is None:
         return None
 
-    coords_normalized = GesturePreprocessor.normalize(coords_raw)
-    image = GestureImageEncoder.to_numpy(coords_normalized, size=size)
+    return GesturePreprocessor.preprocess_to_image(coords_raw, size=size)
 
-    return image
+
+def preview_dataset(dataset_path: str, out_dir: str, verbose: bool = True) -> str | None:
+    """Create a preview image for a processed gesture dataset."""
+    if not os.path.exists(dataset_path):
+        if verbose:
+            print(f"Dataset not found: {dataset_path}")
+        return None
+
+    data = np.load(dataset_path)
+    X, y = data["X"], data["y"]
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "dataset_preview.png")
+
+    fig, axes = plt.subplots(3, 6, figsize=(14, 7))
+    for cls_idx, cls in enumerate([1, 2, 3]):
+        samples = X[y == cls][:6]
+        for i, ax in enumerate(axes[cls_idx]):
+            if i < len(samples):
+                ax.imshow(samples[i], cmap="viridis", vmin=0, vmax=1)
+                ax.set_title(f"Class {cls} [{i}]", fontsize=8)
+            ax.axis("off")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+    if verbose:
+        print(f"Preview saved to: {out_path}")
+
+    return out_path
 
 
 def build_dataset(
     raw_dir: str = "data/raw",
     out_dir: str = "data/processed",
-    size: int = 64,
-    verbose: bool = True
+    size: int = 32,
+    verbose: bool = True,
+    generate_preview: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Iterates over all class folders in raw_dir, processes each recording,
@@ -116,6 +147,9 @@ def build_dataset(
     out_path = os.path.join(out_dir, "dataset.npz")
     np.savez(out_path, X=X, y=y)
 
+    if generate_preview:
+        preview_path = preview_dataset(dataset_path=out_path, out_dir=out_dir, verbose=verbose)
+
     if verbose:
         print(f"\nDataset saved to: {out_path}")
         print(f"  X shape : {X.shape}")
@@ -125,13 +159,3 @@ def build_dataset(
             print(f"  Skipped : {skipped} files")
 
     return X, y
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build gesture classification dataset.")
-    parser.add_argument("--size",    type=int, default=64,             help="Image resolution (default: 64)")
-    parser.add_argument("--raw_dir", type=str, default="data/raw",     help="Raw recordings root directory")
-    parser.add_argument("--out_dir", type=str, default="data/processed", help="Output directory for dataset.npz")
-    args = parser.parse_args()
-
-    build_dataset(raw_dir=args.raw_dir, out_dir=args.out_dir, size=args.size)
