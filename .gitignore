@@ -5,7 +5,8 @@
 *$py.class
 
 data/raw
-data/processed
+data/plots
 
 !data/.gitkeep
 
+ml/models/*.pkl

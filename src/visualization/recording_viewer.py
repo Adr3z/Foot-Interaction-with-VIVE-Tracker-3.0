@@ -20,7 +20,7 @@ from .theme import Theme
 from .tracker_renderer import TrackerRenderer, OrientationMode
 from ..utils import CoordinateMapper
 from ..recordings import FileManager, PlaybackEngine
-from ..gesture_processing import PCAGestureProcessor
+from ..gesture_processing import PCAGestureProcessor, GesturePreprocessor, GestureImageEncoder
 from .view_utils import (PLANE_DEFS, TITLE_BAR_H, build_view_surface, build_plane_views, render_trackers_on_views, toggle_orientation)
 
 Plane = str
@@ -64,7 +64,7 @@ class RecordingViewer:
     SEEK_STEP = 0.5
     CONTROL_BUTTON_HEIGHT = 36
     SIDE_PANEL_WIDTH = 220
-    PCA_PANEL_WIDTH = 360
+    PCA_PANEL_WIDTH = 350
     PROGRESS_BAR_HEIGHT = 32
     CONTROL_BAR_HEIGHT = 64
 
@@ -96,8 +96,9 @@ class RecordingViewer:
         # Clickable control buttons
         self._control_buttons: dict[str, pygame.Rect] = {}
 
-        # PCA preview surface
+        # PCA preview surfaces (raw on top, preprocessed on bottom)
         self._pca_surface: pygame.Surface | None = None
+        self._pca_preprocessed_surface: pygame.Surface | None = None
 
         # Playback control labels and associated actions
         self._control_labels: list[tuple[str, str]] = [
@@ -178,10 +179,17 @@ class RecordingViewer:
             orientation_mode=self._orientation_mode,
         )
 
-        # Draw PCA preview surface between last view and info panel
-        if self._pca_surface is not None and self._pca_rect is not None:
-            self._screen.blit(self._pca_surface, self._pca_rect.topleft)
-            pygame.draw.rect(self._screen, Theme.VIEW_BORDER, self._pca_rect, 1)
+        # Draw PCA panel: raw on top half, preprocessed on bottom half
+        if self._pca_rect is not None:
+            raw_rect, pre_rect = self._split_pca_rect(self._pca_rect)
+
+            if self._pca_surface is not None:
+                self._screen.blit(self._pca_surface, raw_rect.topleft)
+                pygame.draw.rect(self._screen, Theme.VIEW_BORDER, raw_rect, 1)
+
+            if self._pca_preprocessed_surface is not None:
+                self._screen.blit(self._pca_preprocessed_surface, pre_rect.topleft)
+                pygame.draw.rect(self._screen, Theme.VIEW_BORDER, pre_rect, 1)
 
         # Draw information panel
         if self._panel_rect is not None:
@@ -200,6 +208,7 @@ class RecordingViewer:
             pygame.draw.rect(self._screen, Theme.PANEL_BG, self._controls_rect)
             pygame.draw.rect(self._screen, Theme.PANEL_BORDER, self._controls_rect, 1)
             self._draw_control_bar(self._controls_rect)
+
         pygame.display.flip()
 
 
@@ -296,7 +305,7 @@ class RecordingViewer:
         GAP = 12
 
         # Available area excluding progress and bottom control bar
-        content_h = win_h - self.CONTROL_BAR_HEIGHT - self.PROGRESS_BAR_HEIGHT - GAP *4
+        content_h = win_h - self.CONTROL_BAR_HEIGHT - self.PROGRESS_BAR_HEIGHT - GAP * 4
 
         # Divide available width among the three projection views plus PCA and panel columns
         views_w = win_w - self.SIDE_PANEL_WIDTH - self.PCA_PANEL_WIDTH - GAP * 5
@@ -309,7 +318,7 @@ class RecordingViewer:
             self._view_rects[plane_id] = pygame.Rect(x, GAP, view_w, view_h)
             x += view_w + GAP
 
-        # Create PCA preview panel
+        # Create PCA preview panel (holds both raw and preprocessed stacked vertically)
         self._pca_rect = pygame.Rect(x, GAP, self.PCA_PANEL_WIDTH, content_h)
         x += self.PCA_PANEL_WIDTH + GAP
 
@@ -331,35 +340,72 @@ class RecordingViewer:
         self._load_pca_surface()
 
     def _load_pca_surface(self) -> None:
-        """Generate or refresh the PCA comparison surface for the current recording."""
+        """Generate or refresh both PCA surfaces for the current recording.
+
+        The PCA panel is split vertically into two equal halves:
+            - Top half: raw PCA projection (PCAGestureProcessor)
+            - Bottom half: preprocessed PCA projection (GesturePreprocessor + GestureImageEncoder)
+        """
         self._pca_surface = None
+        self._pca_preprocessed_surface = None
+
         if self._recording_path is None or self._pca_rect is None:
             return
 
+        raw_rect, pre_rect = self._split_pca_rect(self._pca_rect)
+
+        # ── raw PCA surface ───────────────────────────────────────────────
         try:
             surface = PCAGestureProcessor.generate_comparison_surface(
                 self._recording_path,
-                width=self._pca_rect.w,
-                height=self._pca_rect.h,
+                width=raw_rect.w,
+                height=raw_rect.h,
                 bg_color_hex="#1E1E24",
                 text_color_hex="#E0E0E6",
             )
-            if surface is None:
-                return
-
-            surface = surface.convert()
-            if surface.get_size() != (self._pca_rect.w, self._pca_rect.h):
-                bg = pygame.Surface((self._pca_rect.w, self._pca_rect.h))
-                bg.fill(Theme.BG)
-                bg.blit(surface, ((bg.get_width() - surface.get_width()) // 2,
-                                   (bg.get_height() - surface.get_height()) // 2))
-                self._pca_surface = bg.convert()
-            else:
-                self._pca_surface = surface
+            if surface is not None:
+                self._pca_surface = self._fit_surface(surface, raw_rect)
         except Exception as exc:
-            print(f"Error generating PCA preview: {exc}")
-            self._pca_surface = None
+            print(f"Error generating raw PCA surface: {exc}")
 
+        # ── preprocessed PCA surface ──────────────────────────────────────
+        try:
+            coords_raw = PCAGestureProcessor.get_2d_coords(self._recording_path)
+            if coords_raw is not None:
+                coords_normalized = GesturePreprocessor.normalize(coords_raw)
+                surface = GestureImageEncoder.to_pygame_surface(
+                    coords_normalized,
+                    width=pre_rect.w,
+                    height=pre_rect.h,
+                    bg_color_hex="#1E1E24",
+                    text_color_hex="#E0E0E6",
+                )
+                self._pca_preprocessed_surface = self._fit_surface(surface, pre_rect)
+        except Exception as exc:
+            print(f"Error generating preprocessed PCA surface: {exc}")
+
+    # ── layout helpers ───────────────────────────────────────────────────────
+    @staticmethod
+    def _split_pca_rect(pca_rect: pygame.Rect) -> tuple[pygame.Rect, pygame.Rect]:
+        """Split the PCA panel rect into two equal vertical halves."""
+        half_h = pca_rect.h // 2
+        raw_rect = pygame.Rect(pca_rect.x, pca_rect.y, pca_rect.w, half_h)
+        pre_rect = pygame.Rect(pca_rect.x, pca_rect.y + half_h, pca_rect.w, pca_rect.h - half_h)
+        return raw_rect, pre_rect
+
+    @staticmethod
+    def _fit_surface(surface: pygame.Surface, target_rect: pygame.Rect) -> pygame.Surface:
+        """Fit a surface into target_rect, centered on a background fill."""
+        surface = surface.convert()
+        if surface.get_size() != (target_rect.w, target_rect.h):
+            bg = pygame.Surface((target_rect.w, target_rect.h))
+            bg.fill(Theme.BG)
+            bg.blit(surface, (
+                (target_rect.w - surface.get_width()) // 2,
+                (target_rect.h - surface.get_height()) // 2,
+            ))
+            return bg.convert()
+        return surface
 
     # ── event handling ───────────────────────────────────────────────────────
     def _handle_events(self) -> None:
@@ -442,7 +488,7 @@ class RecordingViewer:
         line_height = self._font_overlay.get_height() + 8
 
         lines = [
-            "Playback Information", 
+            "Playback Information",
             "",
             f"File: {file_name}",
             f"Status: {status}",
@@ -454,7 +500,7 @@ class RecordingViewer:
             "Keyboard Controls:",
             "SPACE - Play / Pause",
             "LEFT - Rewind 0.5s",
-            "RIGHT - Forward 0.5s", 
+            "RIGHT - Forward 0.5s",
             "HOME - Restart",
             "END - Go to End",
             "S - Toggle Trail",
@@ -470,13 +516,7 @@ class RecordingViewer:
                 color = Theme.ACCENT if hasattr(Theme, "ACCENT") else Theme.TEXT
 
             surf = self._font_overlay.render(line, True, color)
-            self._screen.blit(
-                surf,
-                (
-                    left_x,
-                    top_y + i * line_height,
-                ),
-            )
+            self._screen.blit(surf, (left_x, top_y + i * line_height))
 
 
     def _draw_control_bar(self, bar_rect: pygame.Rect) -> None:
@@ -485,8 +525,8 @@ class RecordingViewer:
 
         spacing = 10
         margin = 14
-        total_spacing = spacing * (button_count -1)
-        available_width = bar_rect.w - margin *2 - total_spacing
+        total_spacing = spacing * (button_count - 1)
+        available_width = bar_rect.w - margin * 2 - total_spacing
 
         button_width = max(90, min(130, available_width // button_count))
         button_height = self.CONTROL_BUTTON_HEIGHT
@@ -504,10 +544,9 @@ class RecordingViewer:
             pygame.draw.rect(self._screen, Theme.CARD_BG, rect, border_radius=8)
             pygame.draw.rect(self._screen, Theme.VIEW_BORDER, rect, 1, border_radius=8)
             text = self._font_body.render(label, True, Theme.TEXT)
-            self._screen.blit(text, (rect.x + (rect.w - text.get_width()) // 2, rect.y + (rect.h - text.get_height()) // 2,), )
+            self._screen.blit(text, (rect.x + (rect.w - text.get_width()) // 2, rect.y + (rect.h - text.get_height()) // 2))
 
             self._control_buttons[key] = rect
-
             x += button_width + spacing
 
     # ── playback controls ────────────────────────────────────────────────────
