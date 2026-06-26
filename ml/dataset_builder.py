@@ -20,8 +20,7 @@ Usage:
 import os
 import numpy as np
 
-from src.gesture_processing.pca_projection import PCAGestureProcessor
-from src.gesture_processing.preprocessor import GesturePreprocessor
+from src.gesture_processing import PCAGestureProcessor, GesturePreprocessor
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

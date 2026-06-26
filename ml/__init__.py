@@ -50,7 +50,10 @@ def run_augmented_pipeline(
     return create_augmented_dataset(input_path=input_path, output_path=output_path)
 
 
+from .realtime_classifier import RealtimeGestureClassifier
+
 __all__ = [
+    "RealtimeGestureClassifier",
     "run_ml_pipeline",
     "run_augmented_pipeline",
     "train_knn",

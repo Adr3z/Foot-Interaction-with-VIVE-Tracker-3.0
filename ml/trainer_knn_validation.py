@@ -32,7 +32,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
-from src.gesture_processing.preprocessor import GesturePreprocessor
+from src.gesture_processing import GesturePreprocessor
 
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")

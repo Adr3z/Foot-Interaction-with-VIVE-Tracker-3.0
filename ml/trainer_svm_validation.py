@@ -103,7 +103,7 @@ def save_model(
     out_dir: str,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "svm_model.pkl")
+    out_path = os.path.join(out_dir, "svm_model_final.pkl")
     with open(out_path, "wb") as f:
         pickle.dump({"model": model, "scaler": scaler}, f)
     print(f"Model saved to: {out_path}")
@@ -180,7 +180,7 @@ def train(
 
     if verbose:
         print_results(y_test, y_pred)
-        save_confusion_matrix(y_test, y_pred, out_dir="data/processed")
+        save_confusion_matrix(y_test, y_pred, out_dir="data/plots")
 
     # ── save model ────────────────────────────────────────────────────────────
     save_model(model, scaler, out_dir=MODELS_DIR)
