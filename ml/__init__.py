@@ -9,7 +9,7 @@ def _load_preview():
 
 
 def train_knn(*args, **kwargs):
-    from .trainer_knn import train
+    from .trainer_knn_validation import train
     return train(*args, **kwargs)
 
 

@@ -59,7 +59,7 @@ def create_augmented_dataset(
     np.savez(output_path, X=X_augmented, y=y_augmented)
 
     print(f"\nAugmented dataset saved successfully to: {output_path}!")
-    print(f"-> Total samples: {X_augmented.shape[0]} (60 originals x 4 flips)")
+    print(f"-> Total samples: {X_augmented.shape[0]}")
     print(f"-> Class distribution: {dict(zip(*np.unique(y_augmented, return_counts=True)))}")
 
 if __name__ == "__main__":

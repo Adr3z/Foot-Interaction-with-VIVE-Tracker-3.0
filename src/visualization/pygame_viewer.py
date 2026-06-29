@@ -14,6 +14,7 @@ Renders three projections side by side:
     • Fonts are instantiated once at startup.
 
 Runtime gesture classification keybindings:
+    G       toggle classification on / off
     W / S   window size  ± 15 frames
     E / Q   step size    ±  5 frames
     Z / X   debounce     ±  1 vote
@@ -118,6 +119,7 @@ class PygameViewer:
         self._recorder = TrackerRecorder()
 
         # Gesture classification
+        self._classification_enabled: bool = True
         self._classifier: RealtimeGestureClassifier | None = None
         self._current_gesture: int | None = None
         self._gesture_history: deque[tuple[str, int]] = deque(maxlen=10)
@@ -158,7 +160,7 @@ class PygameViewer:
         self._recorder.sample(self._render_states)
 
         # Feed the first actively-tracked source into the gesture classifier
-        if self._classifier is not None:
+        if self._classifier is not None and self._classification_enabled:
             for rs in self._render_states:
                 if rs.data.get("tracking"):
                     confirmed = self._classifier.add_sample(
@@ -314,6 +316,11 @@ class PygameViewer:
                     self._recorder.toggle_recording(self._render_states)
 
                 # ── classifier config ──────────────────────────────────────
+                elif event.key == pygame.K_g and self._classifier:
+                    self._classification_enabled = not self._classification_enabled
+                    state = "enabled" if self._classification_enabled else "disabled"
+                    print(f"Classification {state}")
+
                 elif event.key == pygame.K_w and self._classifier:
                     self._classifier.resize_window(self._classifier.window_size + 15)
                     print(f"Window size → {self._classifier.window_size}")
@@ -451,7 +458,6 @@ class PygameViewer:
             self._draw_card_background(cfg_x, y, cfg_w, cfg_h)
             if self._classifier is None:
                 self._blit_row("Classifier", "No model", cfg_x + 14, y + 12, cfg_w - 28, val_color=Theme.TEXT_DIM)
-                self._blit_row("Status", "Disabled", cfg_x + 14, y + 40, cfg_w - 28, val_color=Theme.TEXT_DIM)
             else:
                 self._blit_row(
                     "Window  [W/S]",
@@ -473,18 +479,21 @@ class PygameViewer:
             self._draw_card_background(gest_x, y, gest_w, gest_h)
             if self._classifier is None:
                 self._blit_row("Gesture", "No model", gest_x + 14, y + 12, gest_w - 28, val_color=Theme.TEXT_DIM)
-                self._blit_row("Status", "Disabled", gest_x + 14, y + 40, gest_w - 28, val_color=Theme.TEXT_DIM)
             else:
+                cl_txt   = "On  [G]" if self._classification_enabled else "Off [G]"
+                cl_color = Theme.GREEN_CONN if self._classification_enabled else (230, 40, 40)
+                self._blit_row("Classify", cl_txt, gest_x + 14, y + 12, gest_w - 28, val_color=cl_color)
+
                 if self._current_gesture is not None:
                     g_color = _GESTURE_COLORS.get(self._current_gesture, Theme.TEXT)
                     g_name  = _GESTURE_NAMES.get(self._current_gesture, f"Gesture {self._current_gesture}")
-                    self._blit_row("Current", g_name, gest_x + 14, y + 22, gest_w - 28, val_color=g_color)
+                    self._blit_row("Current", g_name, gest_x + 14, y + 38, gest_w - 28, val_color=g_color)
                 else:
-                    self._blit_row("Current", "—", gest_x + 14, y + 22, gest_w - 28, val_color=Theme.TEXT_DIM)
+                    self._blit_row("Current", "—", gest_x + 14, y + 38, gest_w - 28, val_color=Theme.TEXT_DIM)
 
                 raw = self._classifier.raw_label
                 raw_str = _GESTURE_NAMES.get(raw, "—") if raw is not None else "—"
-                self._blit_row("Raw", raw_str, gest_x + 14, y + 55, gest_w - 28, val_color=Theme.TEXT_DIM)
+                self._blit_row("Raw", raw_str, gest_x + 14, y + 64, gest_w - 28, val_color=Theme.TEXT_DIM)
             y += max(cfg_h, gest_h) + 10
 
             # ── SECTION 5: GESTURE HISTORY ───────────────────────────────────
