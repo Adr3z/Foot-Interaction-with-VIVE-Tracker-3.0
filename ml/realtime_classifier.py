@@ -65,7 +65,7 @@ class RealtimeGestureClassifier:
             return None
         self._step_counter = 0
 
-        if len(self._buffer) < max(3, self.window_size // 4):
+        if len(self._buffer) < max(3, self.window_size // 2):
             return None
 
         self.raw_label = self._predict()
@@ -77,6 +77,7 @@ class RealtimeGestureClassifier:
         old_data = list(self._buffer)
         self.window_size = new_size
         self._buffer = deque(old_data[-new_size:], maxlen=new_size)
+        self._step_counter = 0
 
     def reset(self) -> None:
         self._buffer.clear()
@@ -110,6 +111,5 @@ class RealtimeGestureClassifier:
             self._pending_count = 1
 
         if self._pending_count >= self.debounce_count:
-            self._pending_count = 0
             return label
         return None
