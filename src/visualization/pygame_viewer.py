@@ -210,7 +210,7 @@ class PygameViewer:
 
         pygame.display.flip()
 
-    # ── private: initialization ──────────────────────────────────────────────
+    # ── initialization ───────────────────────────────────────────────────────
 
     def _init_pygame(self) -> None:
         pygame.init()
@@ -288,7 +288,7 @@ class PygameViewer:
             print(f"[Warning] No SVM model at {_MODEL_PATH}. Gesture classification disabled.")
             self._classifier = None
 
-    # ── private: event handling ──────────────────────────────────────────────
+    # ── event handling ───────────────────────────────────────────────────────
 
     def _handle_events(self) -> None:
         for event in pygame.event.get():
@@ -350,176 +350,173 @@ class PygameViewer:
                 self._compute_layout(event.w, event.h)
                 self._rebuild_static_surfaces()
 
-    # ── private: drawing helpers ─────────────────────────────────────────────
+    # ── drawing: panel ───────────────────────────────────────────────────────
 
     def _draw_card_background(self, x: int, y: int, w: int, h: int) -> None:
         rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(self._screen, Theme.CARD_BG, rect, border_radius=8)
         pygame.draw.rect(self._screen, Theme.CARD_BORDER, rect, width=1, border_radius=8)
 
+    def _blit_row(self, key: str, value: str, x: int, y: int, width: int, val_color=Theme.TEXT) -> None:
+        k_surf = self._font_body.render(key, True, Theme.TEXT_DIM)
+        v_surf = self._font_body.render(value, True, val_color)
+        self._screen.blit(k_surf, (x, y))
+        self._screen.blit(v_surf, (x + width - v_surf.get_width(), y))
+
     def _draw_panel_text(self) -> None:
-        pr   = self._panel_rect
-        surf = self._screen
-        pad  = 18
-
+        pr     = self._panel_rect
+        pad    = 18
+        x      = pr.x + pad
         card_w = pr.w - (pad * 2)
-        y = 8
+        y      = 8
 
-        for i, rs in enumerate(self._render_states):
-            data = rs.data
-            if not data:
+        for rs in self._render_states:
+            if not rs.data:
                 continue
+            y = self._draw_section_tracker_info(x, y, card_w, rs)
+            y = self._draw_section_position(x, y, card_w, rs.data)
+            y = self._draw_section_orientation(x, y, card_w, rs.data)
+            y = self._draw_section_classifier(x, y, card_w)
+            if y + 120 <= pr.h:
+                self._draw_section_gesture_history(x, y, card_w)
 
-            name      = data.get("name", "Unknown")
-            connected = data.get("connected", False)
-            tracking  = data.get("tracking", False)
+    def _draw_section_tracker_info(self, x: int, y: int, card_w: int, rs) -> int:
+        surf     = self._screen
+        data     = rs.data
+        col_w    = (card_w - 8) // 2
+        card_h   = 92
+        card_pad = 14
+        inner_w  = col_w - (card_pad * 2)
 
-            # ── SECTION 1: TRACKER INFO + SYSTEM STATUS ──────────────────────
-            info_title = self._font_section.render("Tracker Info", True, Theme.TEXT)
-            sys_title = self._font_section.render("System Status", True, Theme.TEXT)
-            surf.blit(info_title, (pr.x + pad, y))
-            surf.blit(sys_title, (pr.x + pad + (card_w // 2) + 4, y))
-            y += max(info_title.get_height(), sys_title.get_height()) + 12
+        info_title = self._font_section.render("Tracker Info", True, Theme.TEXT)
+        sys_title  = self._font_section.render("System Status", True, Theme.TEXT)
+        surf.blit(info_title, (x, y))
+        surf.blit(sys_title,  (x + col_w + 8, y))
+        y += max(info_title.get_height(), sys_title.get_height()) + 12
 
-            col_w = (card_w - 8) // 2
-            card_h = 92
-            card_pad = 14
-            inner_w = col_w - (card_pad * 2)
+        # Tracker info card
+        self._draw_card_background(x, y, col_w, card_h)
+        self._blit_row("Model",      data.get("name", "Unknown"),                              x + card_pad, y + 14, inner_w, val_color=rs.color)
+        self._blit_row("Connection", "Connected" if data.get("connected") else "Disconnected", x + card_pad, y + 40, inner_w, val_color=Theme.GREEN_CONN)
+        self._blit_row("Tracking",   "Active"    if data.get("tracking")  else "Lost",         x + card_pad, y + 67, inner_w, val_color=Theme.BLUE_ACTIVE)
 
-            self._draw_card_background(pr.x + pad, y, col_w, card_h)
-            self._blit_row("Model", name, pr.x + pad + card_pad, y + 14, inner_w, val_color=rs.color)
-            conn_text  = "Connected" if connected else "Disconnected"
-            self._blit_row("Connection", conn_text, pr.x + pad + card_pad, y + 40, inner_w, val_color=Theme.GREEN_CONN)
-            track_text = "Active" if tracking else "Lost"
-            self._blit_row("Tracking", track_text, pr.x + pad + card_pad, y + 67, inner_w, val_color=Theme.BLUE_ACTIVE)
+        # System status card
+        sys_x       = x + col_w + 8
+        trail_color = Theme.GREEN_CONN if self.show_trail          else Theme.TEXT_DIM
+        rec_color   = (230, 40, 40)   if self._recorder.is_recording else Theme.TEXT_DIM
+        orient_lbl  = "Quaternion"    if self.orientation_mode == OrientationMode.QUATERNION else "Euler"
+        self._draw_card_background(sys_x, y, col_w, card_h)
+        self._blit_row("Trail Status",     "Enabled"   if self.show_trail             else "Disabled", sys_x + card_pad, y + 12, inner_w, val_color=trail_color)
+        self._blit_row("Recording Status", "RECORDING" if self._recorder.is_recording else "Off",      sys_x + card_pad, y + 40, inner_w, val_color=rec_color)
+        self._blit_row("Orientation",      orient_lbl,                                                 sys_x + card_pad, y + 68, inner_w, val_color=Theme.BLUE_ACTIVE)
 
-            sys_x = pr.x + pad + col_w + 8
-            self._draw_card_background(sys_x, y, col_w, card_h)
-            trail_txt   = "Enabled" if self.show_trail else "Disabled"
-            trail_color = Theme.GREEN_CONN if self.show_trail else Theme.TEXT_DIM
-            self._blit_row("Trail Status", trail_txt, sys_x + card_pad, y + 12, inner_w, val_color=trail_color)
-            rec_txt   = "RECORDING" if self._recorder.is_recording else "Off"
-            rec_color = (230, 40, 40) if self._recorder.is_recording else Theme.TEXT_DIM
-            self._blit_row("Recording Status", rec_txt, sys_x + card_pad, y + 40, inner_w, val_color=rec_color)
-            orient_mode = "Quaternion" if self.orientation_mode == OrientationMode.QUATERNION else "Euler"
-            self._blit_row("Orientation", orient_mode, sys_x + card_pad, y + 68, inner_w, val_color=Theme.BLUE_ACTIVE)
-            y += card_h + 10
+        return y + card_h + 10
 
-            # ── SECTION 2: POSITION DATA CARD (METRES -> CM) ─────────────────
-            pos_title = self._font_section.render("Position Data (cm)", True, Theme.TEXT)
-            surf.blit(pos_title, (pr.x + pad, y))
-            y += pos_title.get_height() + 12
+    def _draw_section_position(self, x: int, y: int, card_w: int, data: dict) -> int:
+        surf      = self._screen
+        pos_title = self._font_section.render("Position Data (cm)", True, Theme.TEXT)
+        surf.blit(pos_title, (x, y))
+        y += pos_title.get_height() + 12
 
-            box_w  = (card_w - 16) // 3
-            coords = [("X", data.get("x", 0.0)), ("Y", data.get("y", 0.0)), ("Z", data.get("z", 0.0))]
-            for idx, (axis, val) in enumerate(coords):
-                box_x = pr.x + pad + (idx * (box_w + 8))
-                self._draw_card_background(box_x, y, box_w, 50)
-                ax_lbl  = self._font_fps.render(axis, True, Theme.TEXT_DIM)
-                surf.blit(ax_lbl, (box_x + (box_w - ax_lbl.get_width()) // 2, y + 8))
-                mm_val  = f"{val * 100:,.1f}"
-                val_lbl = self._font_large.render(mm_val, True, Theme.TEXT)
-                surf.blit(val_lbl, (box_x + (box_w - val_lbl.get_width()) // 2, y + 30))
-            y += 50 + 10
+        box_w  = (card_w - 16) // 3
+        coords = [("X", data.get("x", 0.0)), ("Y", data.get("y", 0.0)), ("Z", data.get("z", 0.0))]
+        for idx, (axis, val) in enumerate(coords):
+            box_x   = x + idx * (box_w + 8)
+            ax_lbl  = self._font_fps.render(axis, True, Theme.TEXT_DIM)
+            val_lbl = self._font_large.render(f"{val * 100:,.1f}", True, Theme.TEXT)
+            self._draw_card_background(box_x, y, box_w, 50)
+            surf.blit(ax_lbl,  (box_x + (box_w - ax_lbl.get_width())  // 2, y + 8))
+            surf.blit(val_lbl, (box_x + (box_w - val_lbl.get_width()) // 2, y + 30))
 
-            # ── SECTION 3: ORIENTATION DATA CARD ──────────────────────────────
-            rot_title = self._font_section.render("Orientation (Quat)", True, Theme.TEXT)
-            surf.blit(rot_title, (pr.x + pad, y))
-            y += rot_title.get_height() + 12
+        return y + 50 + 10
 
-            box_w  = (card_w - 24) // 4
-            quat_axes = [
-                ("QX", data.get("qx", 0.0)), ("QY", data.get("qy", 0.0)),
-                ("QZ", data.get("qz", 0.0)), ("QW", data.get("qw", 0.0)),
-            ]
-            for idx, (q_ax, q_val) in enumerate(quat_axes):
-                box_x = pr.x + pad + (idx * (box_w + 8))
-                box_y = y
-                self._draw_card_background(box_x, box_y, box_w, 50)
-                ax_lbl = self._font_fps.render(q_ax, True, Theme.TEXT_DIM)
-                surf.blit(ax_lbl, (box_x + (box_w - ax_lbl.get_width()) // 2, box_y + 8))
-                val_lbl = self._font_large.render(f"{q_val: .3f}", True, Theme.TEXT)
-                surf.blit(val_lbl, (box_x + (box_w - val_lbl.get_width()) // 2, box_y + 30))
-            y += 50 + 10
+    def _draw_section_orientation(self, x: int, y: int, card_w: int, data: dict) -> int:
+        surf      = self._screen
+        rot_title = self._font_section.render("Orientation (Quat)", True, Theme.TEXT)
+        surf.blit(rot_title, (x, y))
+        y += rot_title.get_height() + 12
 
-            # ── SECTION 4: CLASSIFIER CONFIG + GESTURE DETECTION ────────────
-            cfg_title = self._font_section.render("Classifier Config", True, Theme.TEXT)
-            gest_title = self._font_section.render("Gesture Detection", True, Theme.TEXT)
-            surf.blit(cfg_title, (pr.x + pad, y))
-            surf.blit(gest_title, (pr.x + pad + (card_w // 2) + 4, y))
-            y += max(cfg_title.get_height(), gest_title.get_height()) + 12
+        box_w     = (card_w - 24) // 4
+        quat_axes = [
+            ("QX", data.get("qx", 0.0)), ("QY", data.get("qy", 0.0)),
+            ("QZ", data.get("qz", 0.0)), ("QW", data.get("qw", 0.0)),
+        ]
+        for idx, (q_ax, q_val) in enumerate(quat_axes):
+            box_x   = x + idx * (box_w + 8)
+            ax_lbl  = self._font_fps.render(q_ax, True, Theme.TEXT_DIM)
+            val_lbl = self._font_large.render(f"{q_val: .3f}", True, Theme.TEXT)
+            self._draw_card_background(box_x, y, box_w, 50)
+            surf.blit(ax_lbl,  (box_x + (box_w - ax_lbl.get_width())  // 2, y + 8))
+            surf.blit(val_lbl, (box_x + (box_w - val_lbl.get_width()) // 2, y + 30))
 
-            cfg_w = (card_w - 8) // 2
-            gest_w = card_w - cfg_w - 8
-            cfg_h = 92
-            gest_h = 92
+        return y + 50 + 10
 
-            cfg_x = pr.x + pad
-            self._draw_card_background(cfg_x, y, cfg_w, cfg_h)
-            if self._classifier is None:
-                self._blit_row("Classifier", "No model", cfg_x + 14, y + 12, cfg_w - 28, val_color=Theme.TEXT_DIM)
+    def _draw_section_classifier(self, x: int, y: int, card_w: int) -> int:
+        surf       = self._screen
+        cfg_w      = (card_w - 8) // 2
+        gest_w     = card_w - cfg_w - 8
+        card_h     = 92
+        cfg_title  = self._font_section.render("Classifier Config", True, Theme.TEXT)
+        gest_title = self._font_section.render("Gesture Detection", True, Theme.TEXT)
+        surf.blit(cfg_title,  (x, y))
+        surf.blit(gest_title, (x + cfg_w + 8, y))
+        y += max(cfg_title.get_height(), gest_title.get_height()) + 12
+
+        # Classifier config card
+        cfg_x = x
+        self._draw_card_background(cfg_x, y, cfg_w, card_h)
+        if self._classifier is None:
+            self._blit_row("Classifier", "No model", cfg_x + 14, y + 12, cfg_w - 28, val_color=Theme.TEXT_DIM)
+        else:
+            self._blit_row("Window  [W/S]",  f"{self._classifier.window_size} fr",       cfg_x + 14, y + 12, cfg_w - 28)
+            self._blit_row("Step    [E/Q]",  f"{self._classifier.step_size} fr",         cfg_x + 14, y + 38, cfg_w - 28)
+            self._blit_row("Debounce [Z/X]", f"{self._classifier.debounce_count} votes", cfg_x + 14, y + 64, cfg_w - 28)
+
+        # Gesture detection card
+        gest_x = x + cfg_w + 8
+        self._draw_card_background(gest_x, y, gest_w, card_h)
+        if self._classifier is None:
+            self._blit_row("Gesture", "No model", gest_x + 14, y + 12, gest_w - 28, val_color=Theme.TEXT_DIM)
+        else:
+            cl_color = Theme.GREEN_CONN if self._classification_enabled else (230, 40, 40)
+            self._blit_row("Classify", "On  [G]" if self._classification_enabled else "Off [G]", gest_x + 14, y + 12, gest_w - 28, val_color=cl_color)
+            if self._current_gesture is not None:
+                g_color = _GESTURE_COLORS.get(self._current_gesture, Theme.TEXT)
+                g_name  = _GESTURE_NAMES.get(self._current_gesture, f"Gesture {self._current_gesture}")
+                self._blit_row("Current", g_name, gest_x + 14, y + 38, gest_w - 28, val_color=g_color)
             else:
-                self._blit_row(
-                    "Window  [W/S]",
-                    f"{self._classifier.window_size} fr",
-                    cfg_x + 14, y + 12, cfg_w - 28,
-                )
-                self._blit_row(
-                    "Step    [E/Q]",
-                    f"{self._classifier.step_size} fr",
-                    cfg_x + 14, y + 38, cfg_w - 28,
-                )
-                self._blit_row(
-                    "Debounce [Z/X]",
-                    f"{self._classifier.debounce_count} votes",
-                    cfg_x + 14, y + 64, cfg_w - 28,
-                )
+                self._blit_row("Current", "—", gest_x + 14, y + 38, gest_w - 28, val_color=Theme.TEXT_DIM)
+            raw     = self._classifier.raw_label
+            raw_str = _GESTURE_NAMES.get(raw, "—") if raw is not None else "—"
+            self._blit_row("Raw", raw_str, gest_x + 14, y + 64, gest_w - 28, val_color=Theme.TEXT_DIM)
 
-            gest_x = pr.x + pad + cfg_w + 8
-            self._draw_card_background(gest_x, y, gest_w, gest_h)
-            if self._classifier is None:
-                self._blit_row("Gesture", "No model", gest_x + 14, y + 12, gest_w - 28, val_color=Theme.TEXT_DIM)
-            else:
-                cl_txt   = "On  [G]" if self._classification_enabled else "Off [G]"
-                cl_color = Theme.GREEN_CONN if self._classification_enabled else (230, 40, 40)
-                self._blit_row("Classify", cl_txt, gest_x + 14, y + 12, gest_w - 28, val_color=cl_color)
+        return y + card_h + 10
 
-                if self._current_gesture is not None:
-                    g_color = _GESTURE_COLORS.get(self._current_gesture, Theme.TEXT)
-                    g_name  = _GESTURE_NAMES.get(self._current_gesture, f"Gesture {self._current_gesture}")
-                    self._blit_row("Current", g_name, gest_x + 14, y + 38, gest_w - 28, val_color=g_color)
-                else:
-                    self._blit_row("Current", "—", gest_x + 14, y + 38, gest_w - 28, val_color=Theme.TEXT_DIM)
+    def _draw_section_gesture_history(self, x: int, y: int, card_w: int) -> None:
+        surf    = self._screen
+        history = list(self._gesture_history)[:5]
+        row_h   = 24
 
-                raw = self._classifier.raw_label
-                raw_str = _GESTURE_NAMES.get(raw, "—") if raw is not None else "—"
-                self._blit_row("Raw", raw_str, gest_x + 14, y + 64, gest_w - 28, val_color=Theme.TEXT_DIM)
-            y += max(cfg_h, gest_h) + 10
+        hist_title = self._font_section.render("Gesture History", True, Theme.TEXT)
+        surf.blit(hist_title, (x, y))
+        y += hist_title.get_height() + 12
 
-            # ── SECTION 5: GESTURE HISTORY ───────────────────────────────────
-            if y + 120 > pr.h:
-                return
+        card_h = max(36, len(history) * row_h + 8)
+        self._draw_card_background(x, y, card_w, card_h)
 
-            hist_title = self._font_section.render("Gesture History", True, Theme.TEXT)
-            surf.blit(hist_title, (pr.x + pad, y))
-            y += hist_title.get_height() + 12
+        if not history:
+            none_lbl = self._font_body.render("No gestures yet", True, Theme.TEXT_DIM)
+            surf.blit(none_lbl, (x + 14, y + 8))
+        else:
+            for row_i, (ts, label) in enumerate(history):
+                ry      = y + 6 + row_i * row_h
+                ts_surf = self._font_fps.render(ts, True, Theme.TEXT_DIM)
+                g_color = _GESTURE_COLORS.get(label, Theme.TEXT)
+                g_surf  = self._font_fps.render(_GESTURE_NAMES.get(label, str(label)), True, g_color)
+                surf.blit(ts_surf, (x + 14, ry))
+                surf.blit(g_surf,  (x + card_w - 14 - g_surf.get_width(), ry))
 
-            history = list(self._gesture_history)[:5]
-            row_h = 24
-            card_h = max(36, len(history) * row_h + 8)
-            self._draw_card_background(pr.x + pad, y, card_w, card_h)
-
-            if not history:
-                none_lbl = self._font_body.render("No gestures yet", True, Theme.TEXT_DIM)
-                surf.blit(none_lbl, (pr.x + pad + 14, y + 8))
-            else:
-                for row_i, (ts, label) in enumerate(history):
-                    ry = y + 6 + row_i * row_h
-                    ts_surf = self._font_fps.render(ts, True, Theme.TEXT_DIM)
-                    g_color = _GESTURE_COLORS.get(label, Theme.TEXT)
-                    g_surf = self._font_fps.render(_GESTURE_NAMES.get(label, str(label)), True, g_color)
-                    surf.blit(ts_surf, (pr.x + pad + 14, ry))
-                    surf.blit(g_surf, (pr.x + pad + card_w - 14 - g_surf.get_width(), ry))
+    # ── drawing: gesture alert overlay ───────────────────────────────────────
 
     def _render_alert(self) -> None:
         """Draw a fading colored banner at the bottom of the views area on gesture confirm."""
@@ -559,13 +556,7 @@ class PygameViewer:
         self._screen.blit(banner, (banner_x, banner_y))
         self._alert_timer -= 1
 
-    def _blit_row(self, key: str, value: str, x: int, y: int, width: int, val_color=Theme.TEXT) -> None:
-        k_surf = self._font_body.render(key, True, Theme.TEXT_DIM)
-        v_surf = self._font_body.render(value, True, val_color)
-        self._screen.blit(k_surf, (x, y))
-        self._screen.blit(v_surf, (x + width - v_surf.get_width(), y))
-
-    # ── private: shutdown ────────────────────────────────────────────────────
+    # ── shutdown ─────────────────────────────────────────────────────────────
 
     def _shutdown(self) -> None:
         for rs in self._render_states:

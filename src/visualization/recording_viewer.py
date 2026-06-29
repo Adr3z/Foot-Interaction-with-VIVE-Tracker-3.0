@@ -13,8 +13,6 @@ import os
 
 import numpy as np
 import pygame
-from collections import deque
-from typing import Any
 
 from .theme import Theme
 from .tracker_renderer import TrackerRenderer, OrientationMode
@@ -22,36 +20,9 @@ from ..utils import CoordinateMapper
 from ..recordings import FileManager, PlaybackEngine
 from ..gesture_processing import PCAGestureProcessor, GesturePreprocessor, GestureImageEncoder
 from .view_utils import (PLANE_DEFS, TITLE_BAR_H, build_view_surface, build_plane_views, render_trackers_on_views, toggle_orientation)
+from .recording_track_state import RecordingTrackState
 
 Plane = str
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  RECORDING TRACK STATE
-# ──────────────────────────────────────────────────────────────────────────────
-class RecordingTrackState:
-    """Stores the current playback frame data and trail history for a recorded tracker"""
-    def __init__(self, name: str, color: tuple[int, int, int], history_length: int | None = 80):
-        self.name = name
-        self.color = color
-
-        # Recent world-space positions used for trail rendering
-        if history_length is None or history_length <= 0:
-            self.history: deque[dict[str, float]] = deque()
-        else:
-            self.history: deque[dict[str, float]] = deque(maxlen=history_length)
-        # Current frame data
-        self.data: dict[str, Any] = {}
-
-    def update(self, tracker_data: dict[str, Any]) -> None:
-        """ Updata tracker state from the current playback frame"""
-        self.data = tracker_data
-        # Append position to the trail only while tracking is valid
-        if tracker_data.get("tracking"):
-            self.history.append({
-                "x": tracker_data.get("x", 0.0),
-                "y": tracker_data.get("y", 0.0),
-                "z": tracker_data.get("z", 0.0),
-            })
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  MAIN VIEWER CLASS
@@ -213,49 +184,32 @@ class RecordingViewer:
 
 
     # ── recording management ─────────────────────────────────────────────────
+    def _build_track_states(self) -> list[RecordingTrackState]:
+        return [
+            RecordingTrackState(name, Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT), history_length=None)
+            for name in self._recording_data
+        ]
+
     def _load_recording(self) -> bool:
         """ Load a recording file and initialize playback state """
-        path = self._recording_path
-        if not path:
-            path = FileManager.select_recording_path()
-
+        path = self._recording_path or FileManager.select_recording_path()
         if not path or not os.path.exists(path):
             print("No record selected")
             return False
-
         try:
             self._recording_data = FileManager.load_recording_data(path)
         except Exception as exc:
-            print(f"Error to load recording: {exc}")
+            print(f"Error loading recording: {exc}")
             return False
-
         self._recording_path = path
         self._playback = PlaybackEngine(self._recording_data, loop=self._loop)
-        self._track_states = []
-
-        # Create render states for every recorded tracker
-        for name in self._recording_data.keys():
-            color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
-            self._track_states.append(
-                RecordingTrackState(name, color, history_length=None)
-            )
-
+        self._track_states = self._build_track_states()
         self._load_pca_surface()
-
         return True
-
 
     def _reload_recording(self) -> None:
         """ Reload the current recording from disk """
-        if self._load_recording():
-            self._track_states = []
-            for name in self._recording_data.keys():
-                color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
-                self._track_states.append(
-                    RecordingTrackState(name, color, history_length=None)
-                )
-            self._load_pca_surface()
-
+        self._load_recording()
 
     def _change_recording(self) -> None:
         """ Load a different recording selected by the user """
@@ -263,24 +217,15 @@ class RecordingViewer:
         if not path or not os.path.exists(path):
             print("Selection canceled")
             return
-
         try:
             new_data = FileManager.load_recording_data(path)
         except Exception as exc:
-            print(f"Error in loading new file: {exc}")
+            print(f"Error loading file: {exc}")
             return
-
         self._recording_path = path
         self._recording_data = new_data
         self._playback = PlaybackEngine(self._recording_data, loop=self._loop)
-        self._track_states = []
-
-        for name in self._recording_data.keys():
-            color = Theme.TRACKER_COLORS.get(name, Theme.TRACKER_DEFAULT)
-            self._track_states.append(
-                RecordingTrackState(name, color, history_length=None)
-            )
-
+        self._track_states = self._build_track_states()
         self._load_pca_surface()
 
     # ── initialization ───────────────────────────────────────────────────────
@@ -339,6 +284,8 @@ class RecordingViewer:
         )
         self._load_pca_surface()
 
+    # ── pca surfaces ─────────────────────────────────────────────────────────
+
     def _load_pca_surface(self) -> None:
         """Generate or refresh both PCA surfaces for the current recording.
 
@@ -384,7 +331,7 @@ class RecordingViewer:
         except Exception as exc:
             print(f"Error generating preprocessed PCA surface: {exc}")
 
-    # ── layout helpers ───────────────────────────────────────────────────────
+    # ── pca surface helpers ───────────────────────────────────────────────────
     @staticmethod
     def _split_pca_rect(pca_rect: pygame.Rect) -> tuple[pygame.Rect, pygame.Rect]:
         """Split the PCA panel rect into two equal vertical halves."""
@@ -472,7 +419,7 @@ class RecordingViewer:
                 break
 
 
-    # ── drawing helpers ──────────────────────────────────────────────────────
+    # ── drawing: information panel ───────────────────────────────────────────
     def _draw_panel(self, panel_rect: pygame.Rect) -> None:
         """ Draw playback information and keyboard shortcuts """
         if self._playback is None:
@@ -519,6 +466,7 @@ class RecordingViewer:
             self._screen.blit(surf, (left_x, top_y + i * line_height))
 
 
+    # ── drawing: control bar ─────────────────────────────────────────────────
     def _draw_control_bar(self, bar_rect: pygame.Rect) -> None:
         """ Draw bottom playback control buttons """
         button_count = len(self._control_labels)
@@ -587,6 +535,7 @@ class RecordingViewer:
             next_index = 2
         self._playback.set_speed(speeds[next_index])
 
+    # ── drawing: progress bar ─────────────────────────────────────────────────
     def _get_playback_frame_progress(self) -> tuple[int, int]:
         if self._playback is None or not self._recording_data:
             return 0, 0
