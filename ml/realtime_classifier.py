@@ -34,15 +34,18 @@ class RealtimeGestureClassifier:
         window_size: int = 90,
         step_size: int = 15,
         debounce_count: int = 3,
+        cooldown_frames: int = 0,
     ):
         self.window_size = window_size
         self.step_size = step_size
         self.debounce_count = debounce_count
+        self.cooldown_frames = cooldown_frames
 
         self._buffer: deque[list[float]] = deque(maxlen=window_size)
         self._step_counter: int = 0
         self._pending_label: int | None = None
         self._pending_count: int = 0
+        self._cooldown_remaining: int = 0
         self.raw_label: int | None = None  # latest unconfirmed prediction
 
         self._model = None
@@ -65,6 +68,10 @@ class RealtimeGestureClassifier:
             return None
         self._step_counter = 0
 
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            return None
+
         if len(self._buffer) < max(3, self.window_size // 2):
             return None
 
@@ -84,6 +91,7 @@ class RealtimeGestureClassifier:
         self._step_counter = 0
         self._pending_label = None
         self._pending_count = 0
+        self._cooldown_remaining = 0
         self.raw_label = None
 
     # ── private ──────────────────────────────────────────────────────────────
@@ -110,6 +118,7 @@ class RealtimeGestureClassifier:
             self._pending_label = label
             self._pending_count = 1
 
-        if self._pending_count >= self.debounce_count:
+        if self._pending_count == self.debounce_count:
+            self._cooldown_remaining = self.cooldown_frames
             return label
         return None

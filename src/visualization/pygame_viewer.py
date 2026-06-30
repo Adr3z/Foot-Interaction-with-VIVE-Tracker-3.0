@@ -82,9 +82,10 @@ class PygameViewer:
     TRAIL_LENGTH  = 80
 
     # ── gesture classifier defaults (adjustable at runtime via W/S, E/Q, Z/X) ──
-    PRED_WINDOW   = 90   # rolling buffer size in frames   (W / S)
-    PRED_STEP     = 15   # frames between prediction calls (E / Q)
-    PRED_DEBOUNCE = 3    # consecutive matches to confirm  (Z / X)
+    PRED_WINDOW   = 105   # rolling buffer size in frames   (W / S)
+    PRED_STEP     = 20   # frames between prediction calls (E / Q)
+    PRED_DEBOUNCE = 4   # consecutive matches to confirm  (Z / X)
+    PRED_COOLDOWN = 2   # prediction steps blocked after a confirmed gesture
     PRED_ALERT_FRAMES = 110  # how many frames the alert overlay lasts
 
     def __init__(
@@ -282,12 +283,15 @@ class PygameViewer:
                 window_size=self.PRED_WINDOW,
                 step_size=self.PRED_STEP,
                 debounce_count=self.PRED_DEBOUNCE,
+                cooldown_frames=self.PRED_COOLDOWN,
             )
-            print(f"Gesture classifier loaded  (window={self.PRED_WINDOW}  step={self.PRED_STEP}  debounce={self.PRED_DEBOUNCE})")
+            print(f"Gesture classifier loaded  (window={self.PRED_WINDOW}  step={self.PRED_STEP}  debounce={self.PRED_DEBOUNCE}  cooldown={self.PRED_COOLDOWN})")
         except FileNotFoundError:
             print(f"[Warning] No SVM model at {_MODEL_PATH}. Gesture classification disabled.")
             self._classifier = None
-
+        except Exception as exc:
+            print(f"[Warning] Could not load gesture classifier: {exc}. Gesture classification disabled.")
+            self._classifier = None
     # ── event handling ───────────────────────────────────────────────────────
 
     def _handle_events(self) -> None:
@@ -362,7 +366,6 @@ class PygameViewer:
         v_surf = self._font_body.render(value, True, val_color)
         self._screen.blit(k_surf, (x, y))
         self._screen.blit(v_surf, (x + width - v_surf.get_width(), y))
-
     def _draw_panel_text(self) -> None:
         pr     = self._panel_rect
         pad    = 18
@@ -376,7 +379,12 @@ class PygameViewer:
             y = self._draw_section_tracker_info(x, y, card_w, rs)
             y = self._draw_section_position(x, y, card_w, rs.data)
             y = self._draw_section_orientation(x, y, card_w, rs.data)
-            y = self._draw_section_classifier(x, y, card_w)
+
+        y = self._draw_section_classifier(x, y, card_w)
+        if y + 120 <= pr.h:
+            self._draw_section_gesture_history(x, y, card_w)
+        if y + 120 <= pr.h:
+            self._draw_section_gesture_history(x, y, card_w)
             if y + 120 <= pr.h:
                 self._draw_section_gesture_history(x, y, card_w)
 
