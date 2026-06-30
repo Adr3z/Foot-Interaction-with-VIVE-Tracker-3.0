@@ -8,7 +8,7 @@ import sys
 
 from src.visualization.pygame_viewer import PygameViewer
 from src.visualization.recording_viewer import RecordingViewer
-from ml import ( run_ml_pipeline, run_augmented_pipeline, train_knn, train_svm_validation, train_svm_final, )
+from ml import ( run_ml_pipeline, run_augmented_pipeline, train_svm_validation, train_svm_final, )
 
 
 # ── sub-menus ──────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ def _menu_train() -> str:
         print("  0. Back")
         choice = input("  Select [0-2]: ").strip()
         if choice == "1":
-            return _menu_train_validation()
+            return "train_svm_validation"
         elif choice == "2":
             return "train_svm_final"
         elif choice == "0":
@@ -48,23 +48,6 @@ def _menu_train() -> str:
         else:
             print("  [!] Invalid choice.")
 
-
-def _menu_train_validation() -> str:
-    """Sub-menu for validation model classifier selection."""
-    while True:
-        print("\n    -- Validation Model --")
-        print("    1. k-NN")
-        print("    2. SVM (RBF)")
-        print("    0. Back")
-        choice = input("    Select [0-2]: ").strip()
-        if choice == "1":
-            return "train_knn"
-        elif choice == "2":
-            return "train_svm_validation"
-        elif choice == "0":
-            return _menu_train()
-        else:
-            print("    [!] Invalid choice.")
 
 
 # ── main menu ──────────────────────────────────────────────────────────────────
@@ -142,9 +125,6 @@ def _run_mode(mode: str) -> None:
     elif mode == "dataset_augmented":
         run_augmented_pipeline()
 
-    elif mode == "train_knn":
-        train_knn()
-
     elif mode == "train_svm_validation":
         train_svm_validation()
 
@@ -153,7 +133,7 @@ def _run_mode(mode: str) -> None:
 
     else:
         print(f"Unknown mode: {mode}")
-        print("Usage: python main.py [openvr|mock|recording|dataset_normal|dataset_augmented|train_knn|train_svm_validation|train_svm_final]")
+        print("Usage: python main.py [openvr|mock|recording|dataset_normal|dataset_augmented|train_svm_validation|train_svm_final]")
         sys.exit(1)
 
 

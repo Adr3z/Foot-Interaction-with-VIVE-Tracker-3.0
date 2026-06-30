@@ -8,11 +8,6 @@ def _load_preview():
     return preview_dataset
 
 
-def train_knn(*args, **kwargs):
-    from .trainer_knn import train
-    return train(*args, **kwargs)
-
-
 def train_svm_validation(*args, **kwargs):
     from .trainer_svm_validation import train
     return train(*args, **kwargs)
@@ -56,7 +51,6 @@ __all__ = [
     "RealtimeGestureClassifier",
     "run_ml_pipeline",
     "run_augmented_pipeline",
-    "train_knn",
     "train_svm_validation",
     "train_svm_final",
     "_load_pipeline",
