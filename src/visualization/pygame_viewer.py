@@ -83,9 +83,9 @@ class PygameViewer:
 
     # ── gesture classifier defaults (adjustable at runtime via W/S, E/Q, Z/X) ──
     PRED_WINDOW   = 105   # rolling buffer size in frames   (W / S)
-    PRED_STEP     = 20   # frames between prediction calls (E / Q)
-    PRED_DEBOUNCE = 4   # consecutive matches to confirm  (Z / X)
-    PRED_COOLDOWN = 2   # prediction steps blocked after a confirmed gesture
+    PRED_STEP     = 15   # frames between prediction calls (E / Q)
+    PRED_DEBOUNCE = 3   # consecutive matches to confirm  (Z / X)
+    PRED_COOLDOWN = 6   # prediction steps blocked after a confirmed gesture
     PRED_ALERT_FRAMES = 110  # how many frames the alert overlay lasts
 
     def __init__(
